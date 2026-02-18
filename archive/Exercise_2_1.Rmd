@@ -1,0 +1,912 @@
+---
+title: "Exercise 2.1"
+output:
+  pdf_document:
+    latex_engine: xelatex
+
+date: "2025-01-26"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+# 1. Data Analysis and Preprocessing
+
+## 1.0 Load necessary libraries
+```{r}
+
+library(ggplot2)    # For data visualization
+library(glmnet)     # For regularized regression
+library(rpart)      # For CART models
+library(rpart.plot) # For CART models
+library(randomForest) # For random forests
+library(VSURF)      # For variable selection in RF
+library(pROC)       # For calculation of AUC ROC
+library(corrplot)   # For correlation visualization
+```
+
+## 1.1 Open Dataset
+
+```{r}
+# Load the specific file directly
+load("C:/Users/tufma/Desktop/!ASML/Task/data_advanced.RData")
+
+```
+
+## 1.2 Dataset summary
+```{r}
+# cat("Dataset structure:\n")
+# str(A)  # Show structure of the list object
+
+cat("\nFeature matrix dimensions:", dim(A$X))
+cat("\nResponse variable levels:", levels(A$Y))
+```
+
+## 1.3 Check for missing values
+```{r}
+cat("\n\nMissing values check:")
+cat("\nFeatures missing values:", sum(is.na(A$X)))
+cat("\nResponse missing values:", sum(is.na(A$Y)))
+```
+
+## 1.4 Class balance check
+```{r}
+class_balance <- prop.table(table(A$Y))
+cat("\n\nClass balance:\n")
+print(class_balance)
+```
+
+## 1.5 Check scaling need
+```{r}
+cat("\n\nScaling check:")
+cat("\nFeature mean range:", round(range(colMeans(A$X)), 2))
+cat("\nFeature SD range:", round(range(apply(A$X, 2, sd)), 2))
+
+```
+
+## 1.6 Check for multicollinearity
+
+```{r}
+# Compute correlation matrix using A$X
+cor_matrix <- cor(A$X)
+
+# Find indices of highly correlated pairs in the upper triangle
+high_cor_pairs <- which(upper.tri(cor_matrix) & abs(cor_matrix) > 0.8, arr.ind = TRUE)
+
+# Count the number of highly correlated pairs
+high_cor <- nrow(high_cor_pairs)
+cat("\n\nHighly correlated feature pairs (|r| > 0.8):", high_cor)
+
+# Check if there are any highly correlated pairs
+if (high_cor == 0) {
+  cat("\nNo highly correlated feature pairs found (|r| > 0.8).\n")
+} else {
+  # Loop through all highly correlated pairs
+  for (i in 1:high_cor) {
+    # Extract feature names
+    feature1 <- colnames(A$X)[high_cor_pairs[i, 1]]
+    feature2 <- colnames(A$X)[high_cor_pairs[i, 2]]
+
+    # Print the names and correlation value for the current pair
+    cat("\nHighly Correlated Feature Pair", i, ":\n")
+    cat("Feature 1:", feature1, "\n")
+    cat("Feature 2:", feature2, "\n")
+    cat("Correlation between", feature1, "and", feature2, ":",
+        round(cor_matrix[high_cor_pairs[i, 1], high_cor_pairs[i, 2]], 2), "\n")
+  }
+}
+```
+
+
+## 1.7 Summary of the data analysis
+
+1. **High-Dimensional Data with Few Observations**:
+   - The feature matrix has dimensions of **77 observations × 200 features**, indicating that the number of features far exceeds the number of samples. This is a classic case of the "curse of dimensionality," where traditional statistical methods may struggle due to overfitting and multicollinearity.
+   - With only one pair of highly correlated features out of 200, the dataset does not exhibit widespread multicollinearity. This is a good sign for most modeling approaches, including regularized models (Lasso, Ridge, Elastic Net) and tree-based methods.
+
+2. **Class Imbalance and Response Variable**:
+   - The response variable is binary, with levels `-1` and `1`. The class distribution is relatively balanced, with approximately **52% (-1)** and **48% (1)**, reducing concerns about severe class imbalance.
+   - No missing values were detected in either the features or the response variable, ensuring data completeness.
+
+3. **Scaling and Feature Standardization**:
+   - The features have been scaled appropriately, as evidenced by the mean range (`-0.14 to 0.12`) and standard deviation range (`0.92 to 1.08`). This ensures that all features are on a comparable scale. Nonetheless, we will do additional scaling on the next steps.
+
+4. **Challenges with Traditional Methods**:
+   - Basic linear models like OLS regression are unsuitable for this dataset due to high dimensionality (p=200) and small sample size (n=77). Mathematically, the design matrix X yields a singular, non-invertible X′X matrix when p>n, making it impossible to compute a unique solution for the OLS coefficients β=(X′X)^(−1)X′y. Even if p were reduced below n, OLS models would still suffer from overfitting and instability in such high-dimensional settings.
+   - Similarly, dimensionality reduction and feature selection techniques such as PCA , stepwise feature selection , and ANOVA-based feature selection are unlikely to be effective in this scenario. Even if we reduce the number of features (e.g., from 200 to 100), the dimensionality would still exceed the number of observations (n=77), leading to potential overfitting, loss of interpretability, and unreliable results. These methods struggle with the high-dimensional nature of the dataset and do not inherently address the p>n problem.
+
+5. **Cross-Validation and Train-Test Split**:
+   - Given the small dataset, **cross-validation** is essential to ensure robust model evaluation. We will use **5-fold cross-validation** to maximize the use of the limited data while minimizing variance in performance estimates.
+   - The dataset will be split into **80% training** and **20% testing** subsets. Model performance will be evaluated on the test set using the **AUC-ROC metric**, which is well-suited for binary classification tasks and provides insight into the trade-off between true positive and false positive rates.
+
+6. **Model Selection**:
+   - To address the challenges posed by high dimensionality, we will focus on **regularized models** that can handle multicollinearity and feature selection:
+     - **Lasso (L1 regularization)**: Encourages sparsity by shrinking less important feature coefficients to zero, effectively performing feature selection.
+     - **Ridge (L2 regularization)**: Penalizes large coefficients to reduce overfitting without eliminating features.
+     - **Elastic Net**: Combines L1 and L2 regularization, balancing sparsity and stability, making it particularly useful for datasets with highly correlated features.
+   - Additionally, we will explore **tree-based models**, which are robust to high-dimensional data and do not require feature scaling:
+     - **CART (Classification and Regression Trees)**: Implemented using the `rpart` package, this will serve as a baseline tree-based model.
+     - **Random Forest**: An ensemble method that builds multiple decision trees and aggregates their predictions, providing improved accuracy and robustness against overfitting. To enhance interpretability and efficiency, we will apply VSURF (Variable Selection Using Random Forests), a feature selection method for high-dimensional data. 
+
+
+# 2. Regularized regression models
+
+## 2.1 LASSO model
+```{r}
+# 1. Prepare data
+# Convert outcome to factor
+Y_factor <- factor(A$Y, levels = c(-1, 1), labels = c("Class0", "Class1"))
+
+# Create train/test indices
+set.seed(123)
+train_index <- sample(seq_len(nrow(A$X)), size = floor(0.8 * nrow(A$X)))
+
+# Split data
+X_train_raw <- A$X[train_index, , drop = FALSE]  # Keep as data frame/matrix
+Y_train <- Y_factor[train_index]
+X_test_raw <- A$X[-train_index, , drop = FALSE]
+Y_test <- Y_factor[-train_index]
+
+# 2. Manual scaling
+# Calculate scaling parameters from training data
+train_means <- colMeans(X_train_raw)
+train_sds <- apply(X_train_raw, 2, sd)
+
+# Handle zero standard deviations
+train_sds[train_sds == 0] <- 1
+
+# Apply scaling
+X_train_scaled <- scale(X_train_raw, center = train_means, scale = train_sds)
+X_test_scaled <- scale(X_test_raw, center = train_means, scale = train_sds)
+
+# Convert to matrices for glmnet
+X_train_scaled <- as.matrix(X_train_scaled)
+X_test_scaled <- as.matrix(X_test_scaled)
+
+# 3. Fit LASSO model
+set.seed(123)
+
+# Define lambda grid 
+lambda_grid <- 10^seq(-3, 0, length = 10)
+
+# Convert Y to numeric (0/1) for glmnet
+Y_train_num <- as.numeric(Y_train == "Class1")
+
+# Cross-validated model fitting
+cv_fit <- cv.glmnet(
+  x = X_train_scaled,
+  y = Y_train_num,
+  family = "binomial",
+  alpha = 1,
+  lambda = lambda_grid,
+  type.measure = "auc",
+  nfolds = 5
+)
+
+# 4. Model summary
+cat("\n=== Model Fitting Summary ===\n")
+cat("GLMNET Cross-Validation Results:\n")
+cat("Best lambda (lambda.min):", cv_fit$lambda.min, "\n")
+cat("Number of lambda values tested:", length(cv_fit$lambda), "\n")
+cat("Fold count:", cv_fit$nfolds, "\n")
+cat("Maximum AUC achieved:", round(max(cv_fit$cvm), 4), "\n")
+
+# Show cross-validation results table
+cv_results <- data.frame(
+  Lambda = round(cv_fit$lambda, 5),
+  AUC = round(cv_fit$cvm, 4),
+  SD = round(cv_fit$cvsd, 4)
+)
+cat("\nCross-Validation Performance:\n")
+print(cv_results)
+
+# Show coefficient information
+best_coef <- coef(cv_fit, s = "lambda.min")
+non_zero_total <- sum(best_coef != 0)
+non_zero_features <- sum(best_coef[-1] != 0)  # Exclude intercept
+
+# 5. Model evaluation
+# Get best lambda
+best_lambda <- cv_fit$lambda.min
+
+# Generate predictions
+test_prob <- predict(cv_fit, newx = X_test_scaled, s = best_lambda, type = "response")
+test_pred <- factor(ifelse(test_prob >= 0.5, "Class1", "Class0"), 
+                   levels = c("Class0", "Class1"))
+
+# Confusion matrix
+cat("\n=== Confusion Matrix ===\n")
+cm <- table(Predicted = test_pred, Actual = Y_test)
+print(cm)
+
+# Calculate metrics
+TP <- cm["Class1", "Class1"]
+TN <- cm["Class0", "Class0"]
+FP <- cm["Class1", "Class0"]
+FN <- cm["Class0", "Class1"]
+
+accuracy <- (TP + TN) / sum(cm)
+sensitivity <- TP / (TP + FN)
+specificity <- TN / (TN + FP)
+
+cat("\nAccuracy:", round(accuracy, 4))
+cat("\nSensitivity (Recall):", round(sensitivity, 4))
+cat("\nSpecificity:", round(specificity, 4))
+
+# AUC calculation
+roc_obj <- roc(response = Y_test, predictor = as.numeric(test_prob),
+               levels = c("Class0", "Class1"), direction = "<")
+cat("\nTest AUC:", round(auc(roc_obj), 4), "\n")
+
+# 6. Coefficients
+final_coef <- coef(cv_fit, s = best_lambda)
+coef_df <- data.frame(
+  Feature = rownames(final_coef),
+  Coefficient = as.numeric(final_coef),
+  row.names = NULL
+)
+
+cat("\n=== Non-Zero Coefficients ===\n")
+print(coef_df[coef_df$Coefficient != 0, ], row.names = FALSE)
+
+non_zero_total <- sum(final_coef != 0)
+non_zero_features <- sum(final_coef[-1] != 0)  # Exclude intercept
+
+cat("\nNon-zero coefficients (including intercept):", non_zero_total)
+cat("\nNon-zero coefficients (excluding intercept):", non_zero_features, "\n")
+```
+The model demonstrates high performance metrics, such as test AUC of 0.983, but these results are likely unreliable due to a very small test set (16 samples) and potential overfitting, as indicated by perfect cross-validation AUC scores (1) with no variance. The model selected 5 features out of 200, which indicates a considerable simplification of the model. Given the small dataset size (77 observations) and unstable lambda behavior, the model's trustworthiness is questionable.
+
+
+## 2.2 RIDGE model
+
+```{r}
+# 3. Fit RIDGE model
+set.seed(123)
+
+# Define lambda grid
+lambda_grid <- 10^seq(-3, 0, length = 10)
+
+# Convert Y to numeric (0/1) for glmnet
+Y_train_num <- as.numeric(Y_train == "Class1")
+
+# Cross-validated RIDGE model fitting (alpha=0 for Ridge)
+cv_fit <- cv.glmnet(
+  x = X_train_scaled,
+  y = Y_train_num,
+  family = "binomial",
+  alpha = 0,  # Changed from 1 to 0 for Ridge
+  lambda = lambda_grid,
+  type.measure = "auc",
+  nfolds = 5
+)
+
+# 4. Model summary
+cat("\n=== RIDGE Model Fitting Summary ===\n")
+cat("GLMNET Cross-Validation Results:\n")
+cat("Best lambda (lambda.min):", cv_fit$lambda.min, "\n")
+cat("Number of lambda values tested:", length(cv_fit$lambda), "\n")
+cat("Fold count:", cv_fit$nfolds, "\n")
+cat("Maximum AUC achieved:", round(max(cv_fit$cvm), 4), "\n")
+
+# Show cross-validation results table 
+cv_results <- data.frame(
+  Lambda = round(cv_fit$lambda, 5),
+  AUC = round(cv_fit$cvm, 4),
+  SD = round(cv_fit$cvsd, 4)
+)
+cat("\nCross-Validation Performance:\n")
+print(cv_results)
+
+# Show coefficient information (Ridge keeps all features)
+best_coef <- coef(cv_fit, s = "lambda.min")
+cat("\nFeature Impact Summary:\n")
+cat("All features are retained in Ridge regression\n")
+cat("Number of features:", length(best_coef[-1]), "\n")
+
+# 5. Model evaluation 
+# Get best lambda
+best_lambda <- cv_fit$lambda.min
+
+# Generate predictions
+test_prob <- predict(cv_fit, newx = X_test_scaled, s = best_lambda, type = "response")
+test_pred <- factor(ifelse(test_prob >= 0.5, "Class1", "Class0"), 
+                   levels = c("Class0", "Class1"))
+
+# Confusion matrix
+cat("\n=== Confusion Matrix ===\n")
+cm <- table(Predicted = test_pred, Actual = Y_test)
+print(cm)
+
+# Calculate metrics
+TP <- cm["Class1", "Class1"]
+TN <- cm["Class0", "Class0"]
+FP <- cm["Class1", "Class0"]
+FN <- cm["Class0", "Class1"]
+
+accuracy <- (TP + TN) / sum(cm)
+sensitivity <- TP / (TP + FN)
+specificity <- TN / (TN + FP)
+
+cat("\nAccuracy:", round(accuracy, 4))
+cat("\nSensitivity (Recall):", round(sensitivity, 4))
+cat("\nSpecificity:", round(specificity, 4))
+
+# AUC calculation
+roc_obj <- roc(response = Y_test, predictor = as.numeric(test_prob),
+               levels = c("Class0", "Class1"), direction = "<")
+cat("\nTest AUC:", round(auc(roc_obj), 4), "\n")
+
+
+# 6. Coefficients
+final_coef <- coef(cv_fit, s = best_lambda)
+coef_df <- data.frame(
+  Feature = rownames(final_coef),
+  Coefficient = as.numeric(final_coef),
+  row.names = NULL
+)
+
+cat("\n=== Coefficients (Ridge) ===\n")
+print(coef_df[order(abs(coef_df$Coefficient), decreasing = TRUE), ], row.names = FALSE)
+
+cat("\nCoefficient Statistics:\n")
+cat("L2 Norm:", sum(coef_df$Coefficient^2), "\n")
+cat("Maximum Absolute Coefficient:", max(abs(coef_df$Coefficient)), "\n")
+cat("Minimum Absolute Coefficient:", min(abs(coef_df$Coefficient[-1])), "\n")
+```
+
+The Ridge model achieves strong performance (0.95 test AUC) while retaining all 200 features, avoiding the over-regularization concerns of Lasso but sacrificing interpretability. It shows less evidence of overfitting than Lasso, with no perfect cross-validation AUC and more stable lambda behavior, though the small dataset (77 samples, 200 features) and tiny test set (16 samples) still raise reliability concerns. While Ridge appears marginally more trustworthy due to its consistent regularization and avoidance of extreme sparsity, both models likely suffer from overfitting and require validation on a larger dataset. The Ridge model’s inclusion of all features may improve robustness but also increases complexity without clear gains in generalizability.
+
+## 2.3 Elastic Net model
+
+```{r}
+# 3. Fit Elastic Net model
+set.seed(123)
+# Define parameter grid
+alpha_values <- c(0.2, 0.5, 0.8)  # Mix of L1/L2 ratios
+lambda_grid <- 10^seq(-3, 0, length = 10)
+# Convert Y to numeric (0/1) for glmnet
+Y_train_num <- as.numeric(Y_train == "Class1")
+# Initialize storage for CV results
+cv_results <- data.frame()
+# Cross-validated parameter search
+best_score <- -Inf
+best_alpha <- NA
+best_lambda <- NA
+cat("\n=== Elastic Net Tuning Progress ===\n")
+for(alpha in alpha_values) {
+  cv_fit <- cv.glmnet(
+    x = X_train_scaled,
+    y = Y_train_num,
+    family = "binomial",
+    alpha = alpha,
+    lambda = lambda_grid,
+    type.measure = "auc",
+    nfolds = 5
+  )
+  
+  current_score <- max(cv_fit$cvm)
+  cat(sprintf("Alpha: %.1f | Best AUC: %.4f\n", alpha, current_score))
+  
+  if(current_score > best_score) {
+    best_score <- current_score
+    best_alpha <- alpha
+    best_lambda <- cv_fit$lambda.min
+  }
+  
+  # Store cross-validation results for this alpha
+  cv_results <- rbind(cv_results, data.frame(
+    Alpha = rep(alpha, length(lambda_grid)),
+    Lambda = lambda_grid,
+    AUC = cv_fit$cvm,
+    SD = cv_fit$cvsd
+  ))
+}
+# Display cross-validation results table
+cat("\n=== Cross-Validation Results Table ===\n")
+print(cv_results)
+
+# 4. Model summary
+cat("\n=== Elastic Net Final Model ===\n")
+cat("Best alpha:", best_alpha, "\n")
+cat("Best lambda:", best_lambda, "\n")
+cat("Validation AUC:", round(best_score, 4), "\n")
+# Retrain with best parameters
+final_model <- glmnet(
+  x = X_train_scaled,
+  y = Y_train_num,
+  family = "binomial",
+  alpha = best_alpha,
+  lambda = best_lambda
+)
+# 4. Model evaluation 
+# Get best lambda
+best_lambda <- cv_fit$lambda.min
+# Generate predictions
+test_prob <- predict(cv_fit, newx = X_test_scaled, s = best_lambda, type = "response")
+test_pred <- factor(ifelse(test_prob >= 0.5, "Class1", "Class0"), 
+                   levels = c("Class0", "Class1"))
+# Confusion matrix
+cat("\n=== Confusion Matrix ===\n")
+cm <- table(Predicted = test_pred, Actual = Y_test)
+print(cm)
+# Calculate metrics
+TP <- cm["Class1", "Class1"]
+TN <- cm["Class0", "Class0"]
+FP <- cm["Class1", "Class0"]
+FN <- cm["Class0", "Class1"]
+accuracy <- (TP + TN) / sum(cm)
+sensitivity <- TP / (TP + FN)
+specificity <- TN / (TN + FP)
+cat("\nAccuracy:", round(accuracy, 4))
+cat("\nSensitivity (Recall):", round(sensitivity, 4))
+cat("\nSpecificity:", round(specificity, 4))
+# AUC calculation
+roc_obj <- roc(response = Y_test, predictor = as.numeric(test_prob),
+               levels = c("Class0", "Class1"), direction = "<")
+cat("\nTest AUC:", round(auc(roc_obj), 4), "\n")
+# 5. Coefficients
+final_coef <- coef(final_model)
+coef_df <- data.frame(
+  Feature = rownames(final_coef),
+  Coefficient = as.numeric(final_coef),
+  row.names = NULL
+)
+cat("\n=== Elastic Net Coefficients ===\n")
+print(coef_df[order(-abs(coef_df$Coefficient)), ], row.names = FALSE)
+# Coefficient statistics
+cat("\nRegularization Statistics:\n")
+cat("L1 Norm (Sum|Coefficients|):", sum(abs(coef_df$Coefficient)), "\n")
+cat("L2 Norm (Sum Coefficients^2):", sum(coef_df$Coefficient^2), "\n")
+cat("Sparsity Ratio:", mean(coef_df$Coefficient == 0), "\n")
+```
+The Elastic Net model achieves perfect test performance metrics (93.75% accuracy, 1.0 AUC) with high sparsity (95% of coefficients near zero), suggesting strong regularization and feature selection. However, the perfect AUC in both cross-validation and testing, along with zero variance, strongly indicates overfitting. Its results are overly optimistic and unreliable without further validation. The chosen alpha (0.2) leans more toward Ridge, but the lack of generalizability remains a critical concern.
+
+**Among the three regularized models, Ridge appears to be the better choice, although it is still susceptible to overfitting due to the limitations of the dataset.**
+
+# 3. CART models
+
+## 3.1 Basic RPART
+
+```{r}
+
+# 2. Cross-Validation AUC Calculation
+set.seed(123)
+folds <- cut(seq(1, nrow(X_train_scaled)), breaks = 5, labels = FALSE)  # Use scaled data
+cv_auc <- numeric(5)
+
+for (i in 1:5) {
+  val_idx <- which(folds == i)
+  X_val <- X_train_scaled[val_idx, ]
+  Y_val <- Y_train[val_idx]
+  X_tr <- X_train_scaled[-val_idx, ]
+  Y_tr <- Y_train[-val_idx]
+  
+  # Train on scaled data
+  fold_model <- rpart(
+    formula = Y_tr ~ .,
+    data = data.frame(X_tr, Y_tr),  # X_tr is from X_train_scaled
+    method = "class",
+    control = rpart.control(
+      cp = 0.0001,
+      minsplit = 5,
+      minbucket = 10,
+      maxdepth = 8
+    )
+  )
+  
+  val_prob <- predict(fold_model, newdata = data.frame(X_val), type = "prob")[, "Class1"]  # Ensure X_val is a dataframe
+  roc_obj <- roc(response = Y_val, predictor = val_prob, levels = c("Class0", "Class1"), direction = "<")
+  cv_auc[i] <- auc(roc_obj)
+}
+
+mean_cv_auc <- mean(cv_auc)
+cat("\n=== Cross-Validation Results ===\n")
+cat("Mean Cross-Validation AUC:", round(mean_cv_auc, 4), "\n")
+
+# 3. Fit RPART model on full training data (using scaled data)
+set.seed(123)
+tree_model <- rpart(
+  formula = Y_train ~ .,
+  data = data.frame(X_train_scaled, Y_train = Y_train),  # Use scaled training data
+  method = "class",
+  control = rpart.control(
+    xval = 5,
+    cp = 0.0001,
+    minsplit = 5,
+    minbucket = 10,
+    maxdepth = 8
+  )
+)
+
+# 4. Model summary 
+cat("\n=== RPART Model Summary ===\n")
+printcp(tree_model)
+plotcp(tree_model)
+optimal_cp <- tree_model$cptable[which.min(tree_model$cptable[,"xerror"]), "CP"]
+pruned_tree <- prune(tree_model, cp = optimal_cp)
+cat("\nOptimal Complexity Parameter (CP):", optimal_cp, "\n")
+cat("Final Tree Size:", nrow(pruned_tree$frame), "nodes\n")
+
+# 5. Model evaluation (using scaled test data)
+test_pred <- predict(pruned_tree, newdata = data.frame(X_test_scaled), type = "class")  # Use scaled test data
+test_prob <- predict(pruned_tree, newdata = data.frame(X_test_scaled), type = "prob")[,"Class1"]  # Use scaled test data
+
+# Confusion matrix and metrics remain the same
+cat("\n=== Confusion Matrix ===\n")
+cm <- table(Predicted = test_pred, Actual = Y_test)
+print(cm)
+
+TP <- cm["Class1", "Class1"]
+TN <- cm["Class0", "Class0"]
+FP <- cm["Class1", "Class0"]
+FN <- cm["Class0", "Class1"]
+accuracy <- (TP + TN) / sum(cm)
+sensitivity <- TP / (TP + FN)
+specificity <- TN / (TN + FP)
+cat("\nAccuracy:", round(accuracy, 4))
+cat("\nSensitivity (Recall):", round(sensitivity, 4))
+cat("\nSpecificity:", round(specificity, 4))
+
+roc_obj <- roc(response = Y_test, predictor = as.numeric(test_prob),
+               levels = c("Class0", "Class1"), direction = "<")
+cat("\nTest AUC:", round(auc(roc_obj), 4), "\n")
+
+# 6. Tree Visualization & Importance
+cat("\n=== Variable Importance ===\n")
+imp <- pruned_tree$variable.importance
+print(sort(imp, decreasing = TRUE))
+prp(pruned_tree, 
+    extra = 104,
+    nn = TRUE,
+    fallen.leaves = TRUE,
+    shadow.col = "gray",
+    box.palette = "GnBu")
+```
+The RPART model demonstrates moderate performance with a cross-validation AUC of 0.81 and a test AUC of 0.78, indicating no significant overfitting and better consistency compared to Ridge. The tree is based solely on one variable (V2), making the model extremely simple and transparent, but potentially underutilizing valuable information from other features. Let's fine-tune hyperparameters to improve robustness of the tree. 
+
+## 3.2 Fine-tuned RPART
+
+```{r}
+
+# 2. Cross-Validation AUC Calculation
+set.seed(123)
+folds <- cut(seq(1, nrow(X_train_scaled)), breaks = 5, labels = FALSE)  # Use scaled data
+cv_auc <- numeric(5)
+
+for (i in 1:5) {
+  val_idx <- which(folds == i)
+  X_val <- X_train_scaled[val_idx, ]
+  Y_val <- Y_train[val_idx]
+  X_tr <- X_train_scaled[-val_idx, ]
+  Y_tr <- Y_train[-val_idx]
+  
+  # Train on scaled data
+  fold_model <- rpart(
+    formula = Y_tr ~ .,
+    data = data.frame(X_tr, Y_tr),  # Scaled features
+    method = "class",
+    control = rpart.control(
+      cp = 0.0001,
+      minsplit = 5,
+      minbucket = 5,
+      maxdepth = 5
+    )
+  )
+  
+  # Predict using scaled validation data
+  val_prob <- predict(fold_model, newdata = data.frame(X_val), type = "prob")[, "Class1"]
+  roc_obj <- roc(response = Y_val, predictor = val_prob, levels = c("Class0", "Class1"), direction = "<")
+  cv_auc[i] <- auc(roc_obj)
+}
+
+mean_cv_auc <- mean(cv_auc)
+cat("\n=== Cross-Validation Results ===\n")
+cat("Mean Cross-Validation AUC:", round(mean_cv_auc, 4), "\n")
+
+# 3. Fit RPART model on full training data (using scaled data)
+set.seed(123)
+tree_model <- rpart(
+  formula = Y_train ~ .,
+  data = data.frame(X_train_scaled, Y_train = Y_train),  # Scaled features
+  method = "class",
+  control = rpart.control(
+    xval = 5,
+    cp = 0.0001,
+    minsplit = 5,
+    minbucket = 5,
+    maxdepth = 5
+  )
+)
+
+# 4. Model summary 
+cat("\n=== RPART Model Summary ===\n")
+printcp(tree_model)
+plotcp(tree_model)
+optimal_cp <- tree_model$cptable[which.min(tree_model$cptable[,"xerror"]), "CP"]
+pruned_tree <- prune(tree_model, cp = optimal_cp)
+cat("\nOptimal Complexity Parameter (CP):", optimal_cp, "\n")
+cat("Final Tree Size:", nrow(pruned_tree$frame), "nodes\n")
+
+# 5. Model evaluation (using scaled test data)
+test_pred <- predict(pruned_tree, newdata = data.frame(X_test_scaled), type = "class")  # Scaled test data
+test_prob <- predict(pruned_tree, newdata = data.frame(X_test_scaled), type = "prob")[,"Class1"]
+
+# Confusion matrix and metrics
+cat("\n=== Confusion Matrix ===\n")
+cm <- table(Predicted = test_pred, Actual = Y_test)
+print(cm)
+
+TP <- cm["Class1", "Class1"]
+TN <- cm["Class0", "Class0"]
+FP <- cm["Class1", "Class0"]
+FN <- cm["Class0", "Class1"]
+accuracy <- (TP + TN) / sum(cm)
+sensitivity <- TP / (TP + FN)
+specificity <- TN / (TN + FP)
+cat("\nAccuracy:", round(accuracy, 4))
+cat("\nSensitivity (Recall):", round(sensitivity, 4))
+cat("\nSpecificity:", round(specificity, 4))
+
+roc_obj <- roc(response = Y_test, predictor = as.numeric(test_prob),
+               levels = c("Class0", "Class1"), direction = "<")
+cat("\nTest AUC:", round(auc(roc_obj), 4), "\n")
+
+# 6. Tree Visualization & Importance
+cat("\n=== Variable Importance ===\n")
+imp <- pruned_tree$variable.importance
+print(sort(imp, decreasing = TRUE))
+prp(pruned_tree, 
+    extra = 104,
+    nn = TRUE,
+    fallen.leaves = TRUE,
+    shadow.col = "gray",
+    box.palette = "GnBu")
+```
+The tuned RPART model demonstrates improved performance, with a cross-validation AUC of 0.8441 and a test AUC of 0.9167, achieving better generalization and consistency compared to the initial version. Reducing `minbucket` to 5 was the only hyperparameter change that yielded positive results, as adjustments to other parameters like `cp`, `minsplit`, and `maxdepth` did not lead to further improvements. The resulting tree now uses two variables (V2 and V6) and grows to 5 nodes, balancing simplicity with the ability to capture more information from the data.
+
+# 4. Random forest
+
+## 4.1 Basic Random forest
+
+```{r}
+# 2. Fit Random Forest Model with Cross-Validation 
+set.seed(123)
+
+# Number of folds
+k <- 5
+
+# Create indices for k-fold cross-validation manually
+n <- nrow(X_train_scaled)  # Use scaled data
+fold_indices <- split(sample(n), rep(1:k, length.out = n))
+
+# Initialize vectors to store performance metrics
+auc_scores <- numeric(k)
+accuracies <- numeric(k)
+sensitivities <- numeric(k)
+specificities <- numeric(k)
+
+for (i in 1:k) {
+  # Split data into training and validation sets for this fold
+  val_fold_index <- fold_indices[[i]]
+  train_fold_index <- setdiff(1:n, val_fold_index)
+  
+  X_train_fold <- X_train_scaled[train_fold_index, , drop = FALSE]  # Scaled data
+  Y_train_fold <- Y_train[train_fold_index]
+  X_val_fold <- X_train_scaled[val_fold_index, , drop = FALSE]  # Scaled data
+  
+  # Train the Random Forest model
+  rf_model <- randomForest(
+    formula = Y_train_fold ~ .,
+    data = data.frame(X_train_fold, Y_train_fold = Y_train_fold),  # Scaled features
+    importance = TRUE,
+    ntree = 500,
+    mtry = sqrt(ncol(X_train_scaled)),  # Consistent mtry calculation
+    nodesize = 5
+  )
+  
+  # Predict probabilities on the validation set (scaled data)
+  val_prob <- predict(rf_model, newdata = data.frame(X_val_fold), type = "prob")[,"Class1"]
+  
+  # Calculate AUC for this fold
+  roc_obj <- roc(response = Y_train[val_fold_index], predictor = as.numeric(val_prob),
+                 levels = c("Class0", "Class1"), direction = "<")
+  auc_scores[i] <- auc(roc_obj)
+  
+  # Predict classes on the validation set
+  val_pred <- predict(rf_model, newdata = data.frame(X_val_fold))
+  
+  # Confusion matrix for this fold
+  cm <- table(Predicted = val_pred, Actual = Y_train[val_fold_index])
+  
+  # Calculate metrics
+  TP <- cm["Class1", "Class1"]
+  TN <- cm["Class0", "Class0"]
+  FP <- cm["Class1", "Class0"]
+  FN <- cm["Class0", "Class1"]
+  accuracies[i] <- (TP + TN) / sum(cm)
+  sensitivities[i] <- TP / (TP + FN)
+  specificities[i] <- TN / (TN + FP)
+}
+
+# Calculate average performance metrics across all folds
+mean_auc <- mean(auc_scores)
+mean_accuracy <- mean(accuracies)
+mean_sensitivity <- mean(sensitivities)
+mean_specificity <- mean(specificities)
+
+cat("\n=== Cross-Validation Results ===\n")
+cat("Mean AUC:", round(mean_auc, 4), "\n")
+cat("Mean Accuracy:", round(mean_accuracy, 4), "\n")
+cat("Mean Sensitivity (Recall):", round(mean_sensitivity, 4), "\n")
+cat("Mean Specificity:", round(mean_specificity, 4), "\n")
+
+# 3. Final Model Evaluation on Test Set
+final_rf_model <- randomForest(
+  formula = Y_train ~ .,
+  data = data.frame(X_train_scaled, Y_train = Y_train),  # Full scaled training data
+  importance = TRUE,
+  ntree = 500,
+  mtry = sqrt(ncol(X_train_scaled)),  # Consistent with CV
+  nodesize = 5
+)
+
+# Predict using scaled test data
+test_pred <- predict(final_rf_model, newdata = data.frame(X_test_scaled))
+test_prob <- predict(final_rf_model, newdata = data.frame(X_test_scaled), type = "prob")[,"Class1"]
+
+# Confusion matrix and metrics
+cat("\n=== Confusion Matrix ===\n")
+cm <- table(Predicted = test_pred, Actual = Y_test)
+print(cm)
+
+TP <- cm["Class1", "Class1"]
+TN <- cm["Class0", "Class0"]
+FP <- cm["Class1", "Class0"]
+FN <- cm["Class0", "Class1"]
+accuracy <- (TP + TN) / sum(cm)
+sensitivity <- TP / (TP + FN)
+specificity <- TN / (TN + FP)
+cat("\nAccuracy:", round(accuracy, 4))
+cat("\nSensitivity (Recall):", round(sensitivity, 4))
+cat("\nSpecificity:", round(specificity, 4))
+
+roc_obj <- roc(response = Y_test, predictor = as.numeric(test_prob),
+               levels = c("Class0", "Class1"), direction = "<")
+cat("\nTest AUC:", round(auc(roc_obj), 4), "\n")
+
+# 4. Plot Variable Importance
+varImpPlot(final_rf_model, main = "Variable Importance Plot")
+```
+Despite the Random Forest model achieving a slightly higher test AUC (0.93) compared to the fine-tuned RPART model (0.92), its perfect cross-validation AUC of 1 strongly suggests overfitting, particularly given the small dataset size. The RPART model, by contrast, is based on just two variables (V2 and V6) and has a simple 5-node structure, offering transparency and interpretability, whereas Random Forest's ensemble nature makes it more complex and less interpretable, which can be a disadvantage in contexts requiring explainability. In this case, the fine-tuned RPART model appears more reliable than Random Forest. Nonetheless, let's explore VSURF feature selection technique, to potentially improve Random Forest's performance and reduce overfitting risks.
+
+## 4.2 Random forest with VSURF
+
+```{r}
+# 2. Fit Random Forest Model with Cross-Validation 
+set.seed(123)
+
+# Number of folds
+k <- 5
+
+# Create indices for k-fold cross-validation manually
+n <- nrow(X_train_scaled)  # Use scaled data
+fold_indices <- split(sample(n), rep(1:k, length.out = n))
+
+# Initialize vectors to store performance metrics
+auc_scores <- numeric(k)
+accuracies <- numeric(k)
+sensitivities <- numeric(k)
+specificities <- numeric(k)
+
+for (i in 1:k) {
+  # Split data into training and validation sets for this fold
+  val_fold_index <- fold_indices[[i]]
+  train_fold_index <- setdiff(1:n, val_fold_index)
+  
+  X_train_fold <- X_train_scaled[train_fold_index, , drop = FALSE]  # Scaled data
+  Y_train_fold <- Y_train[train_fold_index]
+  X_val_fold <- X_train_scaled[val_fold_index, , drop = FALSE]  # Scaled data
+  
+  # Train the Random Forest model
+  rf_model <- randomForest(
+    formula = Y_train_fold ~ .,
+    data = data.frame(X_train_fold, Y_train_fold = Y_train_fold),  # Scaled features
+    importance = TRUE,
+    ntree = 500,
+    mtry = sqrt(ncol(X_train_scaled)),  # Consistent mtry calculation
+    nodesize = 5
+  )
+  
+  # Predict probabilities on the validation set
+  val_prob <- predict(rf_model, newdata = data.frame(X_val_fold), type = "prob")[,"Class1"]
+  
+  # Calculate AUC for this fold
+  roc_obj <- roc(response = Y_train[val_fold_index], predictor = as.numeric(val_prob),
+                 levels = c("Class0", "Class1"), direction = "<")
+  auc_scores[i] <- auc(roc_obj)
+  
+  # Predict classes on the validation set
+  val_pred <- predict(rf_model, newdata = data.frame(X_val_fold))
+  
+  # Confusion matrix for this fold
+  cm <- table(Predicted = val_pred, Actual = Y_train[val_fold_index])
+  
+  # Calculate metrics for this fold
+  TP <- cm["Class1", "Class1"]
+  TN <- cm["Class0", "Class0"]
+  FP <- cm["Class1", "Class0"]
+  FN <- cm["Class0", "Class1"]
+  
+  accuracies[i] <- (TP + TN) / sum(cm)
+  sensitivities[i] <- TP / (TP + FN)
+  specificities[i] <- TN / (TN + FP)
+}
+
+# Calculate average performance metrics across all folds
+mean_auc <- mean(auc_scores)
+mean_accuracy <- mean(accuracies)
+mean_sensitivity <- mean(sensitivities)
+mean_specificity <- mean(specificities)
+
+cat("\n=== Cross-Validation Results ===\n")
+cat("Mean AUC:", round(mean_auc, 4), "\n")
+cat("Mean Accuracy:", round(mean_accuracy, 4), "\n")
+cat("Mean Sensitivity (Recall):", round(mean_sensitivity, 4), "\n")
+cat("Mean Specificity:", round(mean_specificity, 4), "\n")
+
+# 3. Feature Selection using VSURF 
+vsurf_result <- VSURF(X_train_scaled, Y_train, parallel = TRUE, ntree = 500)  # Scaled data
+selected_vars <- vsurf_result$varselect.interp
+
+# Subset scaled data using selected variables
+X_train_selected <- X_train_scaled[, selected_vars, drop = FALSE]
+X_test_selected <- X_test_scaled[, selected_vars, drop = FALSE]  # Scaled test data
+
+# 4. Final Model Evaluation on Test Set
+final_rf_model <- randomForest(
+  formula = Y_train ~ .,
+  data = data.frame(X_train_selected, Y_train = Y_train),  # Scaled selected features
+  importance = TRUE,
+  ntree = 500,
+  mtry = sqrt(ncol(X_train_selected)),
+  nodesize = 5
+)
+
+# Predict using scaled test data with selected features
+test_pred <- predict(final_rf_model, newdata = data.frame(X_test_selected))
+test_prob <- predict(final_rf_model, newdata = data.frame(X_test_selected), type = "prob")[,"Class1"]
+
+# Confusion matrix
+cat("\n=== Confusion Matrix ===\n")
+cm <- table(Predicted = test_pred, Actual = Y_test)
+print(cm)
+
+# Calculate metrics
+TP <- cm["Class1", "Class1"]
+TN <- cm["Class0", "Class0"]
+FP <- cm["Class1", "Class0"]
+FN <- cm["Class0", "Class1"]
+
+accuracy <- (TP + TN) / sum(cm)
+sensitivity <- TP / (TP + FN)
+specificity <- TN / (TN + FP)
+
+cat("\nAccuracy:", round(accuracy, 4))
+cat("\nSensitivity (Recall):", round(sensitivity, 4))
+cat("\nSpecificity:", round(specificity, 4))
+
+# Test AUC calculation
+roc_obj <- roc(response = Y_test, predictor = as.numeric(test_prob),
+               levels = c("Class0", "Class1"), direction = "<")
+cat("\nTest AUC:", round(auc(roc_obj), 4), "\n")
+
+# 5. Plot Variable Importance 
+varImpPlot(final_rf_model, main = "Variable Importance Plot")
+```
+
+The Random Forest model with feature selection using **VSURF** shows strong performance, achieving a test AUC of 0.95, which is slightly higher than the previous Random Forest model (AUC = 0.9333). However, the cross-validation metrics remain suspiciously perfect (AUC = 1, accuracy = 0.9179), suggesting that overfitting is still a concern, likely due to the small dataset size and limited test set. The VSURF process reduced the number of variables to 3 for the final prediction step, improving interpretability compared to the original Random Forest model while maintaining competitive performance. While the model demonstrates better generalization than before, its inflated cross-validation results indicate that further validation is necessary to confirm its reliability.
+
+# 5. Conclusion
+We have chosen three candidate models - RIDGE, Fine-tuned RPART, Random forest with VSURF — to identify the best-performing model for the dataset. The fine-tuned RPART model stands out as the most reliable choice despite its slightly lower test AUC (0.9167), as it avoids the overfitting risks seen in Ridge's reliance on all features and Random Forest's perfect cross-validation metrics. Its simplicity, interpretability, and focus on just two key variables (V2 and V6) make it more practical for real-world applications. Notably, all three models consistently identify V2, V3, and V6 as the most important features, highlighting their critical role in capturing underlying patterns. This agreement across different modeling approaches reinforces the relevance of these variables and suggests they should be prioritized in future analyses or model development.

@@ -1,0 +1,2775 @@
+﻿---
+title: "Air Quality Modeling Research Report"
+author: "Nikolai Len"
+subtitle: "Data ScienceTech Institute, 2025"
+output:
+  pdf_document:
+    latex_engine: xelatex
+date: "2025-01-26"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+# Task 1: Constrained Multiple Regression on Ozone Data
+**Task statement.** Using the ozone dataset, treat `maxO3` as the response and all numerical predictors except `obs` as explanatory variables. Build the unconstrained model, build the constrained model under `beta_T9 + beta_T12 + beta_T15 = 0`, and compare both models.
+
+# Step 0: Load Required Libraries
+```{r}
+library(restriktor)  # For constrained regression
+library(ggplot2)     # For data visualization
+```
+
+# Step 1: Load the Dataset
+
+```{r}
+file_path <- "ozone_air_quality_data.csv"
+ozone <- read.csv2(file_path, sep = ";", dec = ",")
+
+```
+
+# Step 2: Summarize the Dataset
+```{r}
+# Basic structure
+str(ozone)
+
+# Summary statistics
+summary(ozone)
+
+# Check variables
+# Note: 'vent' and 'pluie' are categorical, others are numerical
+# 'obs' is an identifier and should be excluded
+```
+
+# Step 3: Check for Missing Values
+```{r}
+# Count missing values per column
+colSums(is.na(ozone))
+
+# If missing values exist, handle them (remove rows):
+# ozone_clean <- na.omit(ozone)
+```
+
+# Step 4: Clean the Dataset
+```{r}
+
+# Remove identifier column 'obs' and categorical variables
+ozone_clean <- ozone[, !(names(ozone) %in% c("obs", "vent", "pluie"))]
+```
+
+# Step 5: Fit Unconstrained Model
+```{r}
+# Unconstrained Model (All numerical predictors)
+model_unconstrained <- lm(maxO3 ~ ., data = ozone_clean)
+summary(model_unconstrained)
+```
+
+# Step 6: Fit Constrained Model
+```{r}
+# Constrained Model (beta_T9 + beta_T12 + beta_T15 = 0)
+model_constrained <- restriktor(model_unconstrained,
+                                constraints = "T9 + T12 + T15 == 0")
+summary(model_constrained)
+```
+# Step 7: Compare coefficients
+```{r}
+
+# Compare coefficients
+coef_comparison <- data.frame(
+  Unconstrained = coef(model_unconstrained),
+  Constrained = coef(model_constrained)
+)
+print(coef_comparison)
+```
+
+# Step 8: Compare models
+```{r}
+
+# Hypothesis Testing: Model Comparison Framework
+
+# H0: Imposing the constraint beta_T9 + beta_T12 + beta_T15 = 0 
+#     does NOT significantly worsen model fit
+#     (Constrained model performs equally well)
+
+# H1: The constraint beta_T9 + beta_T12 + beta_T15 = 0 
+#     significantly worsens model fit
+#     (Unconstrained model performs better)
+
+# Compute Residual Sum of Squares (RSS)
+RSS_unconstrained <- sum(resid(model_unconstrained)^2)  # Better fitting model
+RSS_constrained <- sum(resid(model_constrained)^2)      # Restricted model
+
+# Calculate degrees of freedom
+n <- nrow(ozone_clean)        # Total observations
+p <- length(coef(model_unconstrained)) - 1  # Predictors (excluding intercept)
+q <- 1                                # Number of constraints applied
+
+# F-Statistic: Measures relative improvement in fit
+F_stat <- ((RSS_constrained - RSS_unconstrained)/q)/(RSS_unconstrained/(n-p-1))
+
+# P-value: Probability of observing this F-statistic if H0 is true
+p_value <- pf(F_stat, df1 = q, df2 = n-p-1, lower.tail = FALSE)
+
+# Interpret results
+cat("Model Comparison Results:\n")
+cat("---------------------------------\n")
+cat("Unconstrained Model RSS:", round(RSS_unconstrained, 2), "\n")
+cat("Constrained Model RSS:   ", round(RSS_constrained, 2), "\n")
+cat("F-statistic (Improvement Ratio):", round(F_stat, 3), "\n")
+cat("p-value:", format.pval(p_value, eps = 0.001), "\n\n")
+
+if(p_value < 0.05) {
+  cat("Conclusion: Reject H0 - Constraining coefficients significantly worsens model fit (p =", 
+      format.pval(p_value, digits = 3), ")")
+} else {
+  cat("Conclusion: Fail to reject H0 - No evidence that constraint worsens fit (p =", 
+      format.pval(p_value, digits = 3), ")")
+}
+```
+
+
+# Task 2.1: Model Comparison on Advanced Classification Data
+**Task statement.** Using `data_advanced`, construct multiple models to explain response `Y`, compare their performance, select the best model for this dataset, and interpret the results.
+
+# 1. Data Analysis and Preprocessing
+
+## 1.0 Load necessary libraries
+```{r}
+
+library(ggplot2)    # For data visualization
+library(glmnet)     # For regularized regression
+library(rpart)      # For CART models
+library(rpart.plot) # For CART models
+library(randomForest) # For random forests
+library(VSURF)      # For variable selection in RF
+library(pROC)       # For calculation of AUC ROC
+library(corrplot)   # For correlation visualization
+```
+
+## 1.1 Open Dataset
+
+```{r}
+# Load the specific file directly
+load("advanced_classification_data.RData")
+
+```
+
+## 1.2 Dataset summary
+```{r}
+# cat("Dataset structure:\n")
+# str(A)  # Show structure of the list object
+
+cat("\nFeature matrix dimensions:", dim(A$X))
+cat("\nResponse variable levels:", levels(A$Y))
+```
+
+## 1.3 Check for missing values
+```{r}
+cat("\n\nMissing values check:")
+cat("\nFeatures missing values:", sum(is.na(A$X)))
+cat("\nResponse missing values:", sum(is.na(A$Y)))
+```
+
+## 1.4 Class balance check
+```{r}
+class_balance <- prop.table(table(A$Y))
+cat("\n\nClass balance:\n")
+print(class_balance)
+```
+
+## 1.5 Check scaling need
+```{r}
+cat("\n\nScaling check:")
+cat("\nFeature mean range:", round(range(colMeans(A$X)), 2))
+cat("\nFeature SD range:", round(range(apply(A$X, 2, sd)), 2))
+
+```
+
+## 1.6 Check for multicollinearity
+
+```{r}
+# Compute correlation matrix using A$X
+cor_matrix <- cor(A$X)
+
+# Find indices of highly correlated pairs in the upper triangle
+high_cor_pairs <- which(upper.tri(cor_matrix) & abs(cor_matrix) > 0.8, arr.ind = TRUE)
+
+# Count the number of highly correlated pairs
+high_cor <- nrow(high_cor_pairs)
+cat("\n\nHighly correlated feature pairs (|r| > 0.8):", high_cor)
+
+# Check if there are any highly correlated pairs
+if (high_cor == 0) {
+  cat("\nNo highly correlated feature pairs found (|r| > 0.8).\n")
+} else {
+  # Loop through all highly correlated pairs
+  for (i in 1:high_cor) {
+    # Extract feature names
+    feature1 <- colnames(A$X)[high_cor_pairs[i, 1]]
+    feature2 <- colnames(A$X)[high_cor_pairs[i, 2]]
+
+    # Print the names and correlation value for the current pair
+    cat("\nHighly Correlated Feature Pair", i, ":\n")
+    cat("Feature 1:", feature1, "\n")
+    cat("Feature 2:", feature2, "\n")
+    cat("Correlation between", feature1, "and", feature2, ":",
+        round(cor_matrix[high_cor_pairs[i, 1], high_cor_pairs[i, 2]], 2), "\n")
+  }
+}
+```
+
+## 1.7 Summary of the data analysis
+
+1. **High-Dimensional Data with Few Observations**:
+   - The feature matrix has dimensions of **77 observations x 200 features**, indicating that the number of features far exceeds the number of samples. This is a classic case of the "curse of dimensionality," where traditional statistical methods may struggle due to overfitting and multicollinearity.
+   - With only one pair of highly correlated features out of 200, the dataset does not exhibit widespread multicollinearity. This is a good sign for most modeling approaches, including regularized models (Lasso, Ridge, Elastic Net) and tree-based methods.
+
+2. **Class Imbalance and Response Variable**:
+   - The response variable is binary, with levels `-1` and `1`. The class distribution is relatively balanced, with approximately **52% (-1)** and **48% (1)**, reducing concerns about severe class imbalance.
+   - No missing values were detected in either the features or the response variable, ensuring data completeness.
+
+3. **Scaling and Feature Standardization**:
+   - The features have been scaled appropriately, as evidenced by the mean range (`-0.14 to 0.12`) and standard deviation range (`0.92 to 1.08`). This ensures that all features are on a comparable scale. Nonetheless, we will do additional scaling on the next steps.
+
+4. **Challenges with Traditional Methods**:
+   - Basic linear models like OLS regression are unsuitable for this dataset due to high dimensionality (p=200) and small sample size (n=77). Mathematically, the design matrix X yields a singular, non-invertible X'X matrix when p > n, making it impossible to compute a unique solution for the OLS coefficients beta = (X'X)^(-1)X'y. Even if p were reduced below n, OLS models would still suffer from overfitting and instability in such high-dimensional settings.
+   - Similarly, dimensionality reduction and feature selection techniques such as PCA , stepwise feature selection , and ANOVA-based feature selection are unlikely to be effective in this scenario. Even if we reduce the number of features (e.g., from 200 to 100), the dimensionality would still exceed the number of observations (n=77), leading to potential overfitting, loss of interpretability, and unreliable results. These methods struggle with the high-dimensional nature of the dataset and do not inherently address the p>n problem.
+
+5. **Cross-Validation and Train-Test Split**:
+   - Given the small dataset, **cross-validation** is essential to ensure robust model evaluation. We will use **5-fold cross-validation** to maximize the use of the limited data while minimizing variance in performance estimates.
+   - The dataset will be split into **80% training** and **20% testing** subsets. Model performance will be evaluated on the test set using the **AUC-ROC metric**, which is well-suited for binary classification tasks and provides insight into the trade-off between true positive and false positive rates.
+
+6. **Model Selection**:
+   - To address the challenges posed by high dimensionality, we will focus on **regularized models** that can handle multicollinearity and feature selection:
+     - **Lasso (L1 regularization)**: Encourages sparsity by shrinking less important feature coefficients to zero, effectively performing feature selection.
+     - **Ridge (L2 regularization)**: Penalizes large coefficients to reduce overfitting without eliminating features.
+     - **Elastic Net**: Combines L1 and L2 regularization, balancing sparsity and stability, making it particularly useful for datasets with highly correlated features.
+   - Additionally, we will explore **tree-based models**, which are robust to high-dimensional data and do not require feature scaling:
+     - **CART (Classification and Regression Trees)**: Implemented using the `rpart` package, this will serve as a baseline tree-based model.
+     - **Random Forest**: An ensemble method that builds multiple decision trees and aggregates their predictions, providing improved accuracy and robustness against overfitting. To enhance interpretability and efficiency, we will apply VSURF (Variable Selection Using Random Forests), a feature selection method for high-dimensional data. 
+
+# 2. Regularized regression models
+
+## 2.1 LASSO model
+```{r}
+# 1. Prepare data
+# Convert outcome to factor
+Y_factor <- factor(A$Y, levels = c(-1, 1), labels = c("Class0", "Class1"))
+
+# Create train/test indices
+set.seed(123)
+train_index <- sample(seq_len(nrow(A$X)), size = floor(0.8 * nrow(A$X)))
+
+# Split data
+X_train_raw <- A$X[train_index, , drop = FALSE]  # Keep as data frame/matrix
+Y_train <- Y_factor[train_index]
+X_test_raw <- A$X[-train_index, , drop = FALSE]
+Y_test <- Y_factor[-train_index]
+
+# 2. Manual scaling
+# Calculate scaling parameters from training data
+train_means <- colMeans(X_train_raw)
+train_sds <- apply(X_train_raw, 2, sd)
+
+# Handle zero standard deviations
+train_sds[train_sds == 0] <- 1
+
+# Apply scaling
+X_train_scaled <- scale(X_train_raw, center = train_means, scale = train_sds)
+X_test_scaled <- scale(X_test_raw, center = train_means, scale = train_sds)
+
+# Convert to matrices for glmnet
+X_train_scaled <- as.matrix(X_train_scaled)
+X_test_scaled <- as.matrix(X_test_scaled)
+
+# 3. Fit LASSO model
+set.seed(123)
+
+# Define lambda grid 
+lambda_grid <- 10^seq(-3, 0, length = 10)
+
+# Convert Y to numeric (0/1) for glmnet
+Y_train_num <- as.numeric(Y_train == "Class1")
+
+# Cross-validated model fitting
+cv_fit <- cv.glmnet(
+  x = X_train_scaled,
+  y = Y_train_num,
+  family = "binomial",
+  alpha = 1,
+  lambda = lambda_grid,
+  type.measure = "auc",
+  nfolds = 5
+)
+
+# 4. Model summary
+cat("\n=== Model Fitting Summary ===\n")
+cat("GLMNET Cross-Validation Results:\n")
+cat("Best lambda (lambda.min):", cv_fit$lambda.min, "\n")
+cat("Number of lambda values tested:", length(cv_fit$lambda), "\n")
+cat("Fold count:", cv_fit$nfolds, "\n")
+cat("Maximum AUC achieved:", round(max(cv_fit$cvm), 4), "\n")
+
+# Show cross-validation results table
+cv_results <- data.frame(
+  Lambda = round(cv_fit$lambda, 5),
+  AUC = round(cv_fit$cvm, 4),
+  SD = round(cv_fit$cvsd, 4)
+)
+cat("\nCross-Validation Performance:\n")
+print(cv_results)
+
+# Show coefficient information
+best_coef <- coef(cv_fit, s = "lambda.min")
+non_zero_total <- sum(best_coef != 0)
+non_zero_features <- sum(best_coef[-1] != 0)  # Exclude intercept
+
+# 5. Model evaluation
+# Get best lambda
+best_lambda <- cv_fit$lambda.min
+
+# Generate predictions
+test_prob <- predict(cv_fit, newx = X_test_scaled, s = best_lambda, type = "response")
+test_pred <- factor(ifelse(test_prob >= 0.5, "Class1", "Class0"), 
+                   levels = c("Class0", "Class1"))
+
+# Confusion matrix
+cat("\n=== Confusion Matrix ===\n")
+cm <- table(Predicted = test_pred, Actual = Y_test)
+print(cm)
+
+# Calculate metrics
+TP <- cm["Class1", "Class1"]
+TN <- cm["Class0", "Class0"]
+FP <- cm["Class1", "Class0"]
+FN <- cm["Class0", "Class1"]
+
+accuracy <- (TP + TN) / sum(cm)
+sensitivity <- TP / (TP + FN)
+specificity <- TN / (TN + FP)
+
+cat("\nAccuracy:", round(accuracy, 4))
+cat("\nSensitivity (Recall):", round(sensitivity, 4))
+cat("\nSpecificity:", round(specificity, 4))
+
+# AUC calculation
+roc_obj <- roc(response = Y_test, predictor = as.numeric(test_prob),
+               levels = c("Class0", "Class1"), direction = "<")
+cat("\nTest AUC:", round(auc(roc_obj), 4), "\n")
+
+# 6. Coefficients
+final_coef <- coef(cv_fit, s = best_lambda)
+coef_df <- data.frame(
+  Feature = rownames(final_coef),
+  Coefficient = as.numeric(final_coef),
+  row.names = NULL
+)
+
+cat("\n=== Non-Zero Coefficients ===\n")
+print(coef_df[coef_df$Coefficient != 0, ], row.names = FALSE)
+
+non_zero_total <- sum(final_coef != 0)
+non_zero_features <- sum(final_coef[-1] != 0)  # Exclude intercept
+
+cat("\nNon-zero coefficients (including intercept):", non_zero_total)
+cat("\nNon-zero coefficients (excluding intercept):", non_zero_features, "\n")
+```
+The model demonstrates high performance metrics, such as test AUC of 0.983, but these results are likely unreliable due to a very small test set (16 samples) and potential overfitting, as indicated by perfect cross-validation AUC scores (1) with no variance. The model selected 5 features out of 200, which indicates a considerable simplification of the model. Given the small dataset size (77 observations) and unstable lambda behavior, the model's trustworthiness is questionable.
+
+## 2.2 RIDGE model
+
+```{r}
+# 3. Fit RIDGE model
+set.seed(123)
+
+# Define lambda grid
+lambda_grid <- 10^seq(-3, 0, length = 10)
+
+# Convert Y to numeric (0/1) for glmnet
+Y_train_num <- as.numeric(Y_train == "Class1")
+
+# Cross-validated RIDGE model fitting (alpha=0 for Ridge)
+cv_fit <- cv.glmnet(
+  x = X_train_scaled,
+  y = Y_train_num,
+  family = "binomial",
+  alpha = 0,  # Changed from 1 to 0 for Ridge
+  lambda = lambda_grid,
+  type.measure = "auc",
+  nfolds = 5
+)
+
+# 4. Model summary
+cat("\n=== RIDGE Model Fitting Summary ===\n")
+cat("GLMNET Cross-Validation Results:\n")
+cat("Best lambda (lambda.min):", cv_fit$lambda.min, "\n")
+cat("Number of lambda values tested:", length(cv_fit$lambda), "\n")
+cat("Fold count:", cv_fit$nfolds, "\n")
+cat("Maximum AUC achieved:", round(max(cv_fit$cvm), 4), "\n")
+
+# Show cross-validation results table 
+cv_results <- data.frame(
+  Lambda = round(cv_fit$lambda, 5),
+  AUC = round(cv_fit$cvm, 4),
+  SD = round(cv_fit$cvsd, 4)
+)
+cat("\nCross-Validation Performance:\n")
+print(cv_results)
+
+# Show coefficient information (Ridge keeps all features)
+best_coef <- coef(cv_fit, s = "lambda.min")
+cat("\nFeature Impact Summary:\n")
+cat("All features are retained in Ridge regression\n")
+cat("Number of features:", length(best_coef[-1]), "\n")
+
+# 5. Model evaluation 
+# Get best lambda
+best_lambda <- cv_fit$lambda.min
+
+# Generate predictions
+test_prob <- predict(cv_fit, newx = X_test_scaled, s = best_lambda, type = "response")
+test_pred <- factor(ifelse(test_prob >= 0.5, "Class1", "Class0"), 
+                   levels = c("Class0", "Class1"))
+
+# Confusion matrix
+cat("\n=== Confusion Matrix ===\n")
+cm <- table(Predicted = test_pred, Actual = Y_test)
+print(cm)
+
+# Calculate metrics
+TP <- cm["Class1", "Class1"]
+TN <- cm["Class0", "Class0"]
+FP <- cm["Class1", "Class0"]
+FN <- cm["Class0", "Class1"]
+
+accuracy <- (TP + TN) / sum(cm)
+sensitivity <- TP / (TP + FN)
+specificity <- TN / (TN + FP)
+
+cat("\nAccuracy:", round(accuracy, 4))
+cat("\nSensitivity (Recall):", round(sensitivity, 4))
+cat("\nSpecificity:", round(specificity, 4))
+
+# AUC calculation
+roc_obj <- roc(response = Y_test, predictor = as.numeric(test_prob),
+               levels = c("Class0", "Class1"), direction = "<")
+cat("\nTest AUC:", round(auc(roc_obj), 4), "\n")
+
+# 6. Coefficients
+final_coef <- coef(cv_fit, s = best_lambda)
+coef_df <- data.frame(
+  Feature = rownames(final_coef),
+  Coefficient = as.numeric(final_coef),
+  row.names = NULL
+)
+
+cat("\n=== Coefficients (Ridge) ===\n")
+print(coef_df[order(abs(coef_df$Coefficient), decreasing = TRUE), ], row.names = FALSE)
+
+cat("\nCoefficient Statistics:\n")
+cat("L2 Norm:", sum(coef_df$Coefficient^2), "\n")
+cat("Maximum Absolute Coefficient:", max(abs(coef_df$Coefficient)), "\n")
+cat("Minimum Absolute Coefficient:", min(abs(coef_df$Coefficient[-1])), "\n")
+```
+
+The Ridge model achieves strong performance (0.95 test AUC) while retaining all 200 features, avoiding the over-regularization concerns of Lasso but sacrificing interpretability. It shows less evidence of overfitting than Lasso, with no perfect cross-validation AUC and more stable lambda behavior, though the small dataset (77 samples, 200 features) and tiny test set (16 samples) still raise reliability concerns. While Ridge appears marginally more trustworthy due to its consistent regularization and avoidance of extreme sparsity, both models likely suffer from overfitting and require validation on a larger dataset. The Ridge model's inclusion of all features may improve robustness but also increases complexity without clear gains in generalizability.
+
+## 2.3 Elastic Net model
+
+```{r}
+# 3. Fit Elastic Net model
+set.seed(123)
+# Define parameter grid
+alpha_values <- c(0.2, 0.5, 0.8)  # Mix of L1/L2 ratios
+lambda_grid <- 10^seq(-3, 0, length = 10)
+# Convert Y to numeric (0/1) for glmnet
+Y_train_num <- as.numeric(Y_train == "Class1")
+# Initialize storage for CV results
+cv_results <- data.frame()
+# Cross-validated parameter search
+best_score <- -Inf
+best_alpha <- NA
+best_lambda <- NA
+cat("\n=== Elastic Net Tuning Progress ===\n")
+for(alpha in alpha_values) {
+  cv_fit <- cv.glmnet(
+    x = X_train_scaled,
+    y = Y_train_num,
+    family = "binomial",
+    alpha = alpha,
+    lambda = lambda_grid,
+    type.measure = "auc",
+    nfolds = 5
+  )
+  
+  current_score <- max(cv_fit$cvm)
+  cat(sprintf("Alpha: %.1f | Best AUC: %.4f\n", alpha, current_score))
+  
+  if(current_score > best_score) {
+    best_score <- current_score
+    best_alpha <- alpha
+    best_lambda <- cv_fit$lambda.min
+  }
+  
+  # Store cross-validation results for this alpha
+  cv_results <- rbind(cv_results, data.frame(
+    Alpha = rep(alpha, length(lambda_grid)),
+    Lambda = lambda_grid,
+    AUC = cv_fit$cvm,
+    SD = cv_fit$cvsd
+  ))
+}
+# Display cross-validation results table
+cat("\n=== Cross-Validation Results Table ===\n")
+print(cv_results)
+
+# 4. Model summary
+cat("\n=== Elastic Net Final Model ===\n")
+cat("Best alpha:", best_alpha, "\n")
+cat("Best lambda:", best_lambda, "\n")
+cat("Validation AUC:", round(best_score, 4), "\n")
+# Retrain with best parameters
+final_model <- glmnet(
+  x = X_train_scaled,
+  y = Y_train_num,
+  family = "binomial",
+  alpha = best_alpha,
+  lambda = best_lambda
+)
+# 4. Model evaluation 
+# Get best lambda
+best_lambda <- cv_fit$lambda.min
+# Generate predictions
+test_prob <- predict(cv_fit, newx = X_test_scaled, s = best_lambda, type = "response")
+test_pred <- factor(ifelse(test_prob >= 0.5, "Class1", "Class0"), 
+                   levels = c("Class0", "Class1"))
+# Confusion matrix
+cat("\n=== Confusion Matrix ===\n")
+cm <- table(Predicted = test_pred, Actual = Y_test)
+print(cm)
+# Calculate metrics
+TP <- cm["Class1", "Class1"]
+TN <- cm["Class0", "Class0"]
+FP <- cm["Class1", "Class0"]
+FN <- cm["Class0", "Class1"]
+accuracy <- (TP + TN) / sum(cm)
+sensitivity <- TP / (TP + FN)
+specificity <- TN / (TN + FP)
+cat("\nAccuracy:", round(accuracy, 4))
+cat("\nSensitivity (Recall):", round(sensitivity, 4))
+cat("\nSpecificity:", round(specificity, 4))
+# AUC calculation
+roc_obj <- roc(response = Y_test, predictor = as.numeric(test_prob),
+               levels = c("Class0", "Class1"), direction = "<")
+cat("\nTest AUC:", round(auc(roc_obj), 4), "\n")
+# 5. Coefficients
+final_coef <- coef(final_model)
+coef_df <- data.frame(
+  Feature = rownames(final_coef),
+  Coefficient = as.numeric(final_coef),
+  row.names = NULL
+)
+cat("\n=== Elastic Net Coefficients ===\n")
+print(coef_df[order(-abs(coef_df$Coefficient)), ], row.names = FALSE)
+# Coefficient statistics
+cat("\nRegularization Statistics:\n")
+cat("L1 Norm (Sum|Coefficients|):", sum(abs(coef_df$Coefficient)), "\n")
+cat("L2 Norm (Sum Coefficients^2):", sum(coef_df$Coefficient^2), "\n")
+cat("Sparsity Ratio:", mean(coef_df$Coefficient == 0), "\n")
+```
+The Elastic Net model achieves perfect test performance metrics (93.75% accuracy, 1.0 AUC) with high sparsity (95% of coefficients near zero), suggesting strong regularization and feature selection. However, the perfect AUC in both cross-validation and testing, along with zero variance, strongly indicates overfitting. Its results are overly optimistic and unreliable without further validation. The chosen alpha (0.2) leans more toward Ridge, but the lack of generalizability remains a critical concern.
+
+**Among the three regularized models, Ridge appears to be the better choice, although it is still susceptible to overfitting due to the limitations of the dataset.**
+
+# 3. CART models
+
+## 3.1 Basic RPART
+
+```{r}
+
+# 2. Cross-Validation AUC Calculation
+set.seed(123)
+folds <- cut(seq(1, nrow(X_train_scaled)), breaks = 5, labels = FALSE)  # Use scaled data
+cv_auc <- numeric(5)
+
+for (i in 1:5) {
+  val_idx <- which(folds == i)
+  X_val <- X_train_scaled[val_idx, ]
+  Y_val <- Y_train[val_idx]
+  X_tr <- X_train_scaled[-val_idx, ]
+  Y_tr <- Y_train[-val_idx]
+  
+  # Train on scaled data
+  fold_model <- rpart(
+    formula = Y_tr ~ .,
+    data = data.frame(X_tr, Y_tr),  # X_tr is from X_train_scaled
+    method = "class",
+    control = rpart.control(
+      cp = 0.0001,
+      minsplit = 5,
+      minbucket = 10,
+      maxdepth = 8
+    )
+  )
+  
+  val_prob <- predict(fold_model, newdata = data.frame(X_val), type = "prob")[, "Class1"]  # Ensure X_val is a dataframe
+  roc_obj <- roc(response = Y_val, predictor = val_prob, levels = c("Class0", "Class1"), direction = "<")
+  cv_auc[i] <- auc(roc_obj)
+}
+
+mean_cv_auc <- mean(cv_auc)
+cat("\n=== Cross-Validation Results ===\n")
+cat("Mean Cross-Validation AUC:", round(mean_cv_auc, 4), "\n")
+
+# 3. Fit RPART model on full training data (using scaled data)
+set.seed(123)
+tree_model <- rpart(
+  formula = Y_train ~ .,
+  data = data.frame(X_train_scaled, Y_train = Y_train),  # Use scaled training data
+  method = "class",
+  control = rpart.control(
+    xval = 5,
+    cp = 0.0001,
+    minsplit = 5,
+    minbucket = 10,
+    maxdepth = 8
+  )
+)
+
+# 4. Model summary 
+cat("\n=== RPART Model Summary ===\n")
+printcp(tree_model)
+plotcp(tree_model)
+optimal_cp <- tree_model$cptable[which.min(tree_model$cptable[,"xerror"]), "CP"]
+pruned_tree <- prune(tree_model, cp = optimal_cp)
+cat("\nOptimal Complexity Parameter (CP):", optimal_cp, "\n")
+cat("Final Tree Size:", nrow(pruned_tree$frame), "nodes\n")
+
+# 5. Model evaluation (using scaled test data)
+test_pred <- predict(pruned_tree, newdata = data.frame(X_test_scaled), type = "class")  # Use scaled test data
+test_prob <- predict(pruned_tree, newdata = data.frame(X_test_scaled), type = "prob")[,"Class1"]  # Use scaled test data
+
+# Confusion matrix and metrics remain the same
+cat("\n=== Confusion Matrix ===\n")
+cm <- table(Predicted = test_pred, Actual = Y_test)
+print(cm)
+
+TP <- cm["Class1", "Class1"]
+TN <- cm["Class0", "Class0"]
+FP <- cm["Class1", "Class0"]
+FN <- cm["Class0", "Class1"]
+accuracy <- (TP + TN) / sum(cm)
+sensitivity <- TP / (TP + FN)
+specificity <- TN / (TN + FP)
+cat("\nAccuracy:", round(accuracy, 4))
+cat("\nSensitivity (Recall):", round(sensitivity, 4))
+cat("\nSpecificity:", round(specificity, 4))
+
+roc_obj <- roc(response = Y_test, predictor = as.numeric(test_prob),
+               levels = c("Class0", "Class1"), direction = "<")
+cat("\nTest AUC:", round(auc(roc_obj), 4), "\n")
+
+# 6. Tree Visualization & Importance
+cat("\n=== Variable Importance ===\n")
+imp <- pruned_tree$variable.importance
+print(sort(imp, decreasing = TRUE))
+prp(pruned_tree, 
+    extra = 104,
+    nn = TRUE,
+    fallen.leaves = TRUE,
+    shadow.col = "gray",
+    box.palette = "GnBu")
+```
+The RPART model demonstrates moderate performance with a cross-validation AUC of 0.81 and a test AUC of 0.78, indicating no significant overfitting and better consistency compared to Ridge. The tree is based solely on one variable (V2), making the model extremely simple and transparent, but potentially underutilizing valuable information from other features. Let's fine-tune hyperparameters to improve robustness of the tree. 
+
+## 3.2 Fine-tuned RPART
+
+```{r}
+
+# 2. Cross-Validation AUC Calculation
+set.seed(123)
+folds <- cut(seq(1, nrow(X_train_scaled)), breaks = 5, labels = FALSE)  # Use scaled data
+cv_auc <- numeric(5)
+
+for (i in 1:5) {
+  val_idx <- which(folds == i)
+  X_val <- X_train_scaled[val_idx, ]
+  Y_val <- Y_train[val_idx]
+  X_tr <- X_train_scaled[-val_idx, ]
+  Y_tr <- Y_train[-val_idx]
+  
+  # Train on scaled data
+  fold_model <- rpart(
+    formula = Y_tr ~ .,
+    data = data.frame(X_tr, Y_tr),  # Scaled features
+    method = "class",
+    control = rpart.control(
+      cp = 0.0001,
+      minsplit = 5,
+      minbucket = 5,
+      maxdepth = 5
+    )
+  )
+  
+  # Predict using scaled validation data
+  val_prob <- predict(fold_model, newdata = data.frame(X_val), type = "prob")[, "Class1"]
+  roc_obj <- roc(response = Y_val, predictor = val_prob, levels = c("Class0", "Class1"), direction = "<")
+  cv_auc[i] <- auc(roc_obj)
+}
+
+mean_cv_auc <- mean(cv_auc)
+cat("\n=== Cross-Validation Results ===\n")
+cat("Mean Cross-Validation AUC:", round(mean_cv_auc, 4), "\n")
+
+# 3. Fit RPART model on full training data (using scaled data)
+set.seed(123)
+tree_model <- rpart(
+  formula = Y_train ~ .,
+  data = data.frame(X_train_scaled, Y_train = Y_train),  # Scaled features
+  method = "class",
+  control = rpart.control(
+    xval = 5,
+    cp = 0.0001,
+    minsplit = 5,
+    minbucket = 5,
+    maxdepth = 5
+  )
+)
+
+# 4. Model summary 
+cat("\n=== RPART Model Summary ===\n")
+printcp(tree_model)
+plotcp(tree_model)
+optimal_cp <- tree_model$cptable[which.min(tree_model$cptable[,"xerror"]), "CP"]
+pruned_tree <- prune(tree_model, cp = optimal_cp)
+cat("\nOptimal Complexity Parameter (CP):", optimal_cp, "\n")
+cat("Final Tree Size:", nrow(pruned_tree$frame), "nodes\n")
+
+# 5. Model evaluation (using scaled test data)
+test_pred <- predict(pruned_tree, newdata = data.frame(X_test_scaled), type = "class")  # Scaled test data
+test_prob <- predict(pruned_tree, newdata = data.frame(X_test_scaled), type = "prob")[,"Class1"]
+
+# Confusion matrix and metrics
+cat("\n=== Confusion Matrix ===\n")
+cm <- table(Predicted = test_pred, Actual = Y_test)
+print(cm)
+
+TP <- cm["Class1", "Class1"]
+TN <- cm["Class0", "Class0"]
+FP <- cm["Class1", "Class0"]
+FN <- cm["Class0", "Class1"]
+accuracy <- (TP + TN) / sum(cm)
+sensitivity <- TP / (TP + FN)
+specificity <- TN / (TN + FP)
+cat("\nAccuracy:", round(accuracy, 4))
+cat("\nSensitivity (Recall):", round(sensitivity, 4))
+cat("\nSpecificity:", round(specificity, 4))
+
+roc_obj <- roc(response = Y_test, predictor = as.numeric(test_prob),
+               levels = c("Class0", "Class1"), direction = "<")
+cat("\nTest AUC:", round(auc(roc_obj), 4), "\n")
+
+# 6. Tree Visualization & Importance
+cat("\n=== Variable Importance ===\n")
+imp <- pruned_tree$variable.importance
+print(sort(imp, decreasing = TRUE))
+prp(pruned_tree, 
+    extra = 104,
+    nn = TRUE,
+    fallen.leaves = TRUE,
+    shadow.col = "gray",
+    box.palette = "GnBu")
+```
+The tuned RPART model demonstrates improved performance, with a cross-validation AUC of 0.8441 and a test AUC of 0.9167, achieving better generalization and consistency compared to the initial version. Reducing `minbucket` to 5 was the only hyperparameter change that yielded positive results, as adjustments to other parameters like `cp`, `minsplit`, and `maxdepth` did not lead to further improvements. The resulting tree now uses two variables (V2 and V6) and grows to 5 nodes, balancing simplicity with the ability to capture more information from the data.
+
+# 4. Random forest
+
+## 4.1 Basic Random forest
+
+```{r}
+# 2. Fit Random Forest Model with Cross-Validation 
+set.seed(123)
+
+# Number of folds
+k <- 5
+
+# Create indices for k-fold cross-validation manually
+n <- nrow(X_train_scaled)  # Use scaled data
+fold_indices <- split(sample(n), rep(1:k, length.out = n))
+
+# Initialize vectors to store performance metrics
+auc_scores <- numeric(k)
+accuracies <- numeric(k)
+sensitivities <- numeric(k)
+specificities <- numeric(k)
+
+for (i in 1:k) {
+  # Split data into training and validation sets for this fold
+  val_fold_index <- fold_indices[[i]]
+  train_fold_index <- setdiff(1:n, val_fold_index)
+  
+  X_train_fold <- X_train_scaled[train_fold_index, , drop = FALSE]  # Scaled data
+  Y_train_fold <- Y_train[train_fold_index]
+  X_val_fold <- X_train_scaled[val_fold_index, , drop = FALSE]  # Scaled data
+  
+  # Train the Random Forest model
+  rf_model <- randomForest(
+    formula = Y_train_fold ~ .,
+    data = data.frame(X_train_fold, Y_train_fold = Y_train_fold),  # Scaled features
+    importance = TRUE,
+    ntree = 500,
+    mtry = sqrt(ncol(X_train_scaled)),  # Consistent mtry calculation
+    nodesize = 5
+  )
+  
+  # Predict probabilities on the validation set (scaled data)
+  val_prob <- predict(rf_model, newdata = data.frame(X_val_fold), type = "prob")[,"Class1"]
+  
+  # Calculate AUC for this fold
+  roc_obj <- roc(response = Y_train[val_fold_index], predictor = as.numeric(val_prob),
+                 levels = c("Class0", "Class1"), direction = "<")
+  auc_scores[i] <- auc(roc_obj)
+  
+  # Predict classes on the validation set
+  val_pred <- predict(rf_model, newdata = data.frame(X_val_fold))
+  
+  # Confusion matrix for this fold
+  cm <- table(Predicted = val_pred, Actual = Y_train[val_fold_index])
+  
+  # Calculate metrics
+  TP <- cm["Class1", "Class1"]
+  TN <- cm["Class0", "Class0"]
+  FP <- cm["Class1", "Class0"]
+  FN <- cm["Class0", "Class1"]
+  accuracies[i] <- (TP + TN) / sum(cm)
+  sensitivities[i] <- TP / (TP + FN)
+  specificities[i] <- TN / (TN + FP)
+}
+
+# Calculate average performance metrics across all folds
+mean_auc <- mean(auc_scores)
+mean_accuracy <- mean(accuracies)
+mean_sensitivity <- mean(sensitivities)
+mean_specificity <- mean(specificities)
+
+cat("\n=== Cross-Validation Results ===\n")
+cat("Mean AUC:", round(mean_auc, 4), "\n")
+cat("Mean Accuracy:", round(mean_accuracy, 4), "\n")
+cat("Mean Sensitivity (Recall):", round(mean_sensitivity, 4), "\n")
+cat("Mean Specificity:", round(mean_specificity, 4), "\n")
+
+# 3. Final Model Evaluation on Test Set
+final_rf_model <- randomForest(
+  formula = Y_train ~ .,
+  data = data.frame(X_train_scaled, Y_train = Y_train),  # Full scaled training data
+  importance = TRUE,
+  ntree = 500,
+  mtry = sqrt(ncol(X_train_scaled)),  # Consistent with CV
+  nodesize = 5
+)
+
+# Predict using scaled test data
+test_pred <- predict(final_rf_model, newdata = data.frame(X_test_scaled))
+test_prob <- predict(final_rf_model, newdata = data.frame(X_test_scaled), type = "prob")[,"Class1"]
+
+# Confusion matrix and metrics
+cat("\n=== Confusion Matrix ===\n")
+cm <- table(Predicted = test_pred, Actual = Y_test)
+print(cm)
+
+TP <- cm["Class1", "Class1"]
+TN <- cm["Class0", "Class0"]
+FP <- cm["Class1", "Class0"]
+FN <- cm["Class0", "Class1"]
+accuracy <- (TP + TN) / sum(cm)
+sensitivity <- TP / (TP + FN)
+specificity <- TN / (TN + FP)
+cat("\nAccuracy:", round(accuracy, 4))
+cat("\nSensitivity (Recall):", round(sensitivity, 4))
+cat("\nSpecificity:", round(specificity, 4))
+
+roc_obj <- roc(response = Y_test, predictor = as.numeric(test_prob),
+               levels = c("Class0", "Class1"), direction = "<")
+cat("\nTest AUC:", round(auc(roc_obj), 4), "\n")
+
+# 4. Plot Variable Importance
+varImpPlot(final_rf_model, main = "Variable Importance Plot")
+```
+Despite the Random Forest model achieving a slightly higher test AUC (0.93) compared to the fine-tuned RPART model (0.92), its perfect cross-validation AUC of 1 strongly suggests overfitting, particularly given the small dataset size. The RPART model, by contrast, is based on just two variables (V2 and V6) and has a simple 5-node structure, offering transparency and interpretability, whereas Random Forest's ensemble nature makes it more complex and less interpretable, which can be a disadvantage in contexts requiring explainability. In this case, the fine-tuned RPART model appears more reliable than Random Forest. Nonetheless, let's explore VSURF feature selection technique, to potentially improve Random Forest's performance and reduce overfitting risks.
+
+## 4.2 Random forest with VSURF
+
+```{r}
+# 2. Fit Random Forest Model with Cross-Validation 
+set.seed(123)
+
+# Number of folds
+k <- 5
+
+# Create indices for k-fold cross-validation manually
+n <- nrow(X_train_scaled)  # Use scaled data
+fold_indices <- split(sample(n), rep(1:k, length.out = n))
+
+# Initialize vectors to store performance metrics
+auc_scores <- numeric(k)
+accuracies <- numeric(k)
+sensitivities <- numeric(k)
+specificities <- numeric(k)
+
+for (i in 1:k) {
+  # Split data into training and validation sets for this fold
+  val_fold_index <- fold_indices[[i]]
+  train_fold_index <- setdiff(1:n, val_fold_index)
+  
+  X_train_fold <- X_train_scaled[train_fold_index, , drop = FALSE]  # Scaled data
+  Y_train_fold <- Y_train[train_fold_index]
+  X_val_fold <- X_train_scaled[val_fold_index, , drop = FALSE]  # Scaled data
+  
+  # Train the Random Forest model
+  rf_model <- randomForest(
+    formula = Y_train_fold ~ .,
+    data = data.frame(X_train_fold, Y_train_fold = Y_train_fold),  # Scaled features
+    importance = TRUE,
+    ntree = 500,
+    mtry = sqrt(ncol(X_train_scaled)),  # Consistent mtry calculation
+    nodesize = 5
+  )
+  
+  # Predict probabilities on the validation set
+  val_prob <- predict(rf_model, newdata = data.frame(X_val_fold), type = "prob")[,"Class1"]
+  
+  # Calculate AUC for this fold
+  roc_obj <- roc(response = Y_train[val_fold_index], predictor = as.numeric(val_prob),
+                 levels = c("Class0", "Class1"), direction = "<")
+  auc_scores[i] <- auc(roc_obj)
+  
+  # Predict classes on the validation set
+  val_pred <- predict(rf_model, newdata = data.frame(X_val_fold))
+  
+  # Confusion matrix for this fold
+  cm <- table(Predicted = val_pred, Actual = Y_train[val_fold_index])
+  
+  # Calculate metrics for this fold
+  TP <- cm["Class1", "Class1"]
+  TN <- cm["Class0", "Class0"]
+  FP <- cm["Class1", "Class0"]
+  FN <- cm["Class0", "Class1"]
+  
+  accuracies[i] <- (TP + TN) / sum(cm)
+  sensitivities[i] <- TP / (TP + FN)
+  specificities[i] <- TN / (TN + FP)
+}
+
+# Calculate average performance metrics across all folds
+mean_auc <- mean(auc_scores)
+mean_accuracy <- mean(accuracies)
+mean_sensitivity <- mean(sensitivities)
+mean_specificity <- mean(specificities)
+
+cat("\n=== Cross-Validation Results ===\n")
+cat("Mean AUC:", round(mean_auc, 4), "\n")
+cat("Mean Accuracy:", round(mean_accuracy, 4), "\n")
+cat("Mean Sensitivity (Recall):", round(mean_sensitivity, 4), "\n")
+cat("Mean Specificity:", round(mean_specificity, 4), "\n")
+
+# 3. Feature Selection using VSURF 
+vsurf_result <- VSURF(X_train_scaled, Y_train, parallel = TRUE, ntree = 500)  # Scaled data
+selected_vars <- vsurf_result$varselect.interp
+
+# Subset scaled data using selected variables
+X_train_selected <- X_train_scaled[, selected_vars, drop = FALSE]
+X_test_selected <- X_test_scaled[, selected_vars, drop = FALSE]  # Scaled test data
+
+# 4. Final Model Evaluation on Test Set
+final_rf_model <- randomForest(
+  formula = Y_train ~ .,
+  data = data.frame(X_train_selected, Y_train = Y_train),  # Scaled selected features
+  importance = TRUE,
+  ntree = 500,
+  mtry = sqrt(ncol(X_train_selected)),
+  nodesize = 5
+)
+
+# Predict using scaled test data with selected features
+test_pred <- predict(final_rf_model, newdata = data.frame(X_test_selected))
+test_prob <- predict(final_rf_model, newdata = data.frame(X_test_selected), type = "prob")[,"Class1"]
+
+# Confusion matrix
+cat("\n=== Confusion Matrix ===\n")
+cm <- table(Predicted = test_pred, Actual = Y_test)
+print(cm)
+
+# Calculate metrics
+TP <- cm["Class1", "Class1"]
+TN <- cm["Class0", "Class0"]
+FP <- cm["Class1", "Class0"]
+FN <- cm["Class0", "Class1"]
+
+accuracy <- (TP + TN) / sum(cm)
+sensitivity <- TP / (TP + FN)
+specificity <- TN / (TN + FP)
+
+cat("\nAccuracy:", round(accuracy, 4))
+cat("\nSensitivity (Recall):", round(sensitivity, 4))
+cat("\nSpecificity:", round(specificity, 4))
+
+# Test AUC calculation
+roc_obj <- roc(response = Y_test, predictor = as.numeric(test_prob),
+               levels = c("Class0", "Class1"), direction = "<")
+cat("\nTest AUC:", round(auc(roc_obj), 4), "\n")
+
+# 5. Plot Variable Importance 
+varImpPlot(final_rf_model, main = "Variable Importance Plot")
+```
+
+The Random Forest model with feature selection using **VSURF** shows strong performance, achieving a test AUC of 0.95, which is slightly higher than the previous Random Forest model (AUC = 0.9333). However, the cross-validation metrics remain suspiciously perfect (AUC = 1, accuracy = 0.9179), suggesting that overfitting is still a concern, likely due to the small dataset size and limited test set. The VSURF process reduced the number of variables to 3 for the final prediction step, improving interpretability compared to the original Random Forest model while maintaining competitive performance. While the model demonstrates better generalization than before, its inflated cross-validation results indicate that further validation is necessary to confirm its reliability.
+
+# 5. Conclusion
+We have chosen three candidate models: RIDGE, Fine-tuned RPART, and Random Forest with VSURF to identify the best-performing model for the dataset. The fine-tuned RPART model stands out as the most reliable choice despite its slightly lower test AUC (0.9167), as it avoids the overfitting risks seen in Ridge's reliance on all features and Random Forest's perfect cross-validation metrics. Its simplicity, interpretability, and focus on just two key variables (V2 and V6) make it more practical for real-world applications. Notably, all three models consistently identify V2, V3, and V6 as the most important features, highlighting their critical role in capturing underlying patterns. This agreement across different modeling approaches reinforces the relevance of these variables and suggests they should be prioritized in future analyses or model development.
+
+# Task 2.2: PM10 Modeling with VSURF Rouen Data
+**Task statement.** Repeat the modeling workflow using real-world PM10 pollution observations from the Rouen area available in the `VSURF` package, and identify the best-performing approach.
+
+# 1. Data Analysis and Preprocessing
+
+## 1.0 Load necessary libraries
+```{r}
+
+library(ggplot2)    # For data visualization
+library(glmnet)     # For regularized regression
+library(rpart)      # For CART models
+library(rpart.plot) # For CART models
+library(randomForest) # For random forests
+library(VSURF)      # For variable selection in RF
+library(pROC)       # For calculation of AUC ROC
+library(corrplot)   # For correlation visualization
+library(knitr)
+
+```
+
+## 1.1 Open Dataset
+```{r}
+
+# Load the dataset
+data("jus", package = "VSURF")
+
+# Display the structure of the 'ail' dataset
+str(jus)
+
+```
+
+```{r}
+# Assign to list A with features (X) and response (Y)
+A <- list(
+  X = subset(jus, select = -PM10),  # Features matrix (exclude response column)
+  Y = jus$PM10                      # Response variable (ensure it's a factor)
+)
+```
+
+## 1.2 Dataset summary
+```{r}
+cat("Dataset structure:\n")
+str(A)  # Show structure of the list object
+
+# After creating list A:
+cat("\nFeature matrix dimensions:", dim(A$X))
+cat("\nResponse variable summary (numeric):")
+print(summary(A$Y))  # Show min, max, median, etc.
+
+```
+The dataset differs from the original as the response variable is numeric, not binary. Also now we have a much better dataset with just 17 variables and 1096 observations
+
+## 1.3 Check for missing values
+```{r}
+cat("\n\nMissing values check:")
+cat("\nFeatures missing values:", sum(is.na(A$X)))
+cat("\nResponse missing values:", sum(is.na(A$Y)))
+```
+As the number of the missing values is insignificant, for the sake of simplicity we just delete them 
+
+```{r}
+
+# Determine which rows have missing values in Y or any column of X
+missing_rows <- is.na(A$Y) | apply(is.na(A$X), 1, any)
+
+# Subset A directly by removing the rows with missing values
+A$X <- A$X[!missing_rows, ]
+A$Y <- A$Y[!missing_rows]
+
+# Print the number of removed rows
+cat("Removed rows:", sum(missing_rows), "\n")
+
+# Print the new size of the dataset
+cat("New dataset size:", nrow(A$X), "observations\n")
+```
+Let's double check the missing values after we have deleted the rows with missing values
+
+```{r}
+cat("\n\nMissing values check:")
+cat("\nFeatures missing values:", sum(is.na(A$X)))
+cat("\nResponse missing values:", sum(is.na(A$Y)))
+```
+
+## 1.5 Check scaling need
+```{r}
+cat("\n\nScaling check:")
+cat("\nFeature mean range:", round(range(colMeans(A$X)), 2))
+cat("\nFeature SD range:", round(range(apply(A$X, 2, sd)), 2))
+
+```
+Obviously scaling is required. We will apply it on the subsequent steps.
+
+## 1.6 Check for multicollinearity
+
+```{r}
+# Compute correlation matrix using A$X
+cor_matrix <- cor(A$X)
+
+# Find indices of highly correlated pairs in the upper triangle
+high_cor_pairs <- which(upper.tri(cor_matrix) & abs(cor_matrix) > 0.8, arr.ind = TRUE)
+
+# Count the number of highly correlated pairs
+high_cor <- nrow(high_cor_pairs)
+cat("\n\nHighly correlated feature pairs (|r| > 0.8):", high_cor)
+
+# Check if there are any highly correlated pairs
+if (high_cor == 0) {
+  cat("\nNo highly correlated feature pairs found (|r| > 0.8).\n")
+} else {
+  # Loop through all highly correlated pairs
+  for (i in 1:high_cor) {
+    # Extract feature names
+    feature1 <- colnames(A$X)[high_cor_pairs[i, 1]]
+    feature2 <- colnames(A$X)[high_cor_pairs[i, 2]]
+
+    # Print the names and correlation value for the current pair
+    cat("\nHighly Correlated Feature Pair", i, ":\n")
+    cat("Feature 1:", feature1, "\n")
+    cat("Feature 2:", feature2, "\n")
+    cat("Correlation between", feature1, "and", feature2, ":",
+        round(cor_matrix[high_cor_pairs[i, 1], high_cor_pairs[i, 2]], 2), "\n")
+  }
+}
+```
+The analysis identified five highly correlated feature pairs within the temperature, wind, and humidity categories, each exhibiting correlation coefficients above 0.8. Specifically, the temperature features (T.min, T.max, T.moy), wind features (VV.max, VV.moy), and humidity features (HR.min, HR.moy) show strong interrelationships. Given this high multicollinearity, it may be tempting to retain only the average values for each category. However, the analysis will initially include all features and progressively address multicollinearity by eliminating redundant variables.
+
+## 1.7 Summary of the data analysis
+
+### Summary of the New Dataset and Analysis Plan
+
+1. **Moderate-Dimensional Data with Sufficient Observations**:
+   - The feature matrix has dimensions of **1032 observations x 17 features**, making this dataset significantly different from the previous one. Unlike the earlier dataset, where the number of features far exceeded the number of observations (p > n), this dataset is well-suited for traditional statistical methods such as **Ordinary Least Squares (OLS) regression**. The ratio of observations to features (n=1032, p=17) ensures that the design matrix $ X'X $ is invertible, enabling reliable estimation of model coefficients.
+   - Among the 17 features, **5 are multicollinear**, which introduces redundancy in the dataset. This multicollinearity is likely due to overlapping information across certain features, as some features represent ranges or categories that could be summarized by averages. While it may be tempting to simplify the dataset by retaining only average values for each category, the analysis will initially include all features and progressively address multicollinearity through systematic elimination of redundant variables.
+
+2. **Numeric Response Variable**:
+   - Unlike the binary response variable in the previous dataset, the response variable in this dataset is **numeric**. This indicates a regression problem rather than a classification task. 
+
+3. **Scaling and Feature Standardization**:
+   - Standardization will still be applied to ensure comparability and improve the performance of models sensitive to feature scaling, such as PCA and regularized regression. Scaling will also help mitigate potential issues arising from multicollinearity during model training.
+
+4. **Modeling Approach**:
+   - Given the improved characteristics of this dataset (sufficient observations and moderate dimensionality), we can now employ a broader range of modeling techniques. The analysis will proceed as follows:
+     - **4.1 Start with OLS**: As the dataset satisfies the conditions for OLS (n > p and no singularities in $ X'X $), we will begin with a baseline linear regression model to establish a performance benchmark.
+     - **4.2 Correlation Filtering**: To address multicollinearity, we will identify and remove highly correlated features based on pairwise correlation coefficients. This step will reduce redundancy while preserving interpretability.
+     - **4.3 Apply Variance Inflation Factor (VIF)**: VIF will be used to assess and mitigate multicollinearity. Features with high VIF values (e.g., >10) will be removed iteratively until multicollinearity is sufficiently reduced.
+     - **4.4 Stepwise Selection**: A stepwise feature selection approach (forward, backward, or hybrid) will be applied to identify the most relevant subset of features for predicting the response variable.
+     - **4.5 Principal Component Analysis (PCA)**: PCA will be explored as a dimensionality reduction technique to capture the majority of variance in the data using fewer components. This will help address any residual multicollinearity and reduce noise in the dataset.
+   - Following these preprocessing steps, we will proceed with the same suite of models used in the previous analysis:
+     - **Regularized Models**: Lasso, Ridge, and Elastic Net will be evaluated for their ability to handle multicollinearity and perform implicit feature selection.
+     - **Tree-Based Models**: CART and Random Forest will serve as robust alternatives, particularly for capturing nonlinear relationships and interactions among features. VSURF will again be used for feature selection within the Random Forest framework.
+
+5. **Cross-Validation and Train-Test Split**:
+   - Despite the larger dataset, **cross-validation** remains essential to ensure robust model evaluation and generalization. We will use **5-fold cross-validation** to maximize the use of the available data while minimizing variance in performance estimates.
+   - The dataset will be split into **80% training** and **20% testing** subsets. Model performance will be evaluated on the test set using metrics appropriate for regression tasks, such as **Mean Squared Error (MSE)**, **Root Mean Squared Error (RMSE)**, and **R-squared ($ R^2 $)**. These metrics provide insights into prediction accuracy and the proportion of variance explained by the model.
+
+# 2. Basic regression models
+
+## 2.1 Basic LM
+
+```{r}
+# 1. Prepare Data
+set.seed(123)
+train_index <- sample(seq_len(nrow(A$X)), size = floor(0.8 * nrow(A$X)))
+
+# Split data using direct A$X/A$Y access
+X_train_raw <- A$X[train_index, , drop = FALSE]
+Y_train <- A$Y[train_index]
+X_test_raw <- A$X[-train_index, , drop = FALSE]
+Y_test <- A$Y[-train_index]
+
+# 2. Manual Scaling
+# Calculate scaling parameters from training data
+train_means <- colMeans(X_train_raw)
+train_sds <- apply(X_train_raw, 2, sd)
+train_sds[train_sds == 0] <- 1
+
+# Apply scaling
+X_train_scaled <- scale(X_train_raw, center = train_means, scale = train_sds)
+X_test_scaled <- scale(X_test_raw, center = train_means, scale = train_sds)
+
+# Convert to data frames
+train_df <- as.data.frame(X_train_scaled)
+train_df$Y <- Y_train  # Add target variable
+
+# Prepare test data frame with same structure
+test_df <- as.data.frame(X_test_scaled)
+colnames(test_df) <- colnames(train_df)[-ncol(train_df)]  # Exclude Y column
+
+# 3. Cross-Validation
+set.seed(123)
+n_folds <- 5
+fold_ids <- sample(rep(1:n_folds, length.out = nrow(train_df)))
+
+cv_results <- data.frame(
+  Fold = integer(),
+  MSE = numeric(),
+  RMSE = numeric(),
+  R2 = numeric()
+)
+
+for (fold in 1:n_folds) {
+  val_indices <- which(fold_ids == fold)
+  train_fold <- train_df[-val_indices, ]
+  val_fold <- train_df[val_indices, ]
+  
+  fold_fit <- lm(Y ~ ., data = train_fold)
+  fold_pred <- predict(fold_fit, newdata = val_fold)
+  
+  fold_mse <- mean((val_fold$Y - fold_pred)^2)
+  cv_results <- rbind(cv_results, data.frame(
+    Fold = fold,
+    MSE = fold_mse,
+    RMSE = sqrt(fold_mse),
+    R2 = 1 - (sum((val_fold$Y - fold_pred)^2) / sum((val_fold$Y - mean(val_fold$Y))^2))
+  ))
+}
+
+# 4. Train Final Model
+lm_fit <- lm(Y ~ ., data = train_df)
+
+# 5. Model Evaluation
+cat("\n=== Linear Model Summary ===\n")
+print(summary(lm_fit))
+
+cat("\n=== Cross-Validation Results ===\n")
+print(cv_results)
+cat("\nMean CV MSE:", round(mean(cv_results$MSE), 4))
+cat("\nMean CV RMSE:", round(mean(cv_results$RMSE), 4))
+cat("\nMean CV R-squared:", round(mean(cv_results$R2), 4), "\n")
+
+# Test set evaluation
+test_pred <- predict(lm_fit, newdata = test_df)
+mse_test <- mean((Y_test - test_pred)^2)
+rmse_test <- sqrt(mse_test)
+ss_total <- sum((Y_test - mean(Y_test))^2)
+ss_residual <- sum((Y_test - test_pred)^2)
+r2_test <- 1 - (ss_residual/ss_total)
+
+cat("\n=== Test Set Evaluation ===\n")
+cat("MSE:", round(mse_test, 4), "\n")
+cat("RMSE:", round(rmse_test, 4), "\n")
+cat("R-squared:", round(r2_test, 4), "\n")
+
+# 6. Coefficients
+cat("\n=== Model Coefficients ===\n")
+coef_df <- data.frame(
+  Feature = names(coef(lm_fit)),
+  Coefficient = round(coef(lm_fit), 4),
+  row.names = NULL
+)
+print(coef_df)
+
+cat("\nNumber of coefficients (including intercept):", length(coef(lm_fit)))
+cat("\nNumber of features (excluding intercept):", length(coef(lm_fit))-1, "\n")
+
+```
+
+## 2.2 Correlation Filtering
+
+```{r}
+# 1. Correlation Filtering
+cat("\n=== Correlation Filtering ===\n")
+
+# Compute correlation matrix using TRAINING DATA only
+cor_matrix <- cor(X_train_scaled)
+
+# Find highly correlated pairs in the upper triangle (|r| > 0.8)
+high_cor_pairs <- which(upper.tri(cor_matrix) & abs(cor_matrix) > 0.8, arr.ind = TRUE)
+high_cor <- nrow(high_cor_pairs)
+
+cat("Highly correlated feature pairs (|r| > 0.8):", high_cor, "\n")
+
+if (high_cor > 0) {
+  # Identify features to remove using your detection method
+  features_to_remove <- unique(
+    unlist(
+      lapply(1:nrow(high_cor_pairs), function(i) {
+        # Get feature names for this pair
+        f1 <- colnames(X_train_scaled)[high_cor_pairs[i, 1]]
+        f2 <- colnames(X_train_scaled)[high_cor_pairs[i, 2]]
+        
+        # Calculate average absolute correlation for each feature
+        avg_corr1 <- mean(abs(cor_matrix[, high_cor_pairs[i, 1]]))
+        avg_corr2 <- mean(abs(cor_matrix[, high_cor_pairs[i, 2]]))
+        
+        # Remove the feature with the higher average correlation
+        if (avg_corr1 > avg_corr2) f1 else f2
+      })
+    )
+  )
+  
+  cat("\nRemoving features with high multicollinearity:\n")
+  print(features_to_remove)
+  
+  # Create new filtered datasets without the removed features
+  X_train_filtered <- X_train_scaled[, !colnames(X_train_scaled) %in% features_to_remove]
+  X_test_filtered  <- X_test_scaled[, !colnames(X_test_scaled) %in% features_to_remove]
+  
+  # Show details of the highly correlated pairs
+  cat("\nHighly correlated pairs details:\n")
+  for (i in 1:high_cor) {
+    f1 <- colnames(cor_matrix)[high_cor_pairs[i, 1]]
+    f2 <- colnames(cor_matrix)[high_cor_pairs[i, 2]]
+    cat(sprintf("%-15s vs %-15s: r = %.2f\n", 
+                f1, f2, cor_matrix[high_cor_pairs[i, 1], high_cor_pairs[i, 2]]))
+  }
+} else {
+  cat("No highly correlated features found (|r| > 0.8)\n")
+  # If none are found, the filtered data is the same as the original
+  X_train_filtered <- X_train_scaled
+  X_test_filtered  <- X_test_scaled
+}
+
+# 2. Prepare Filtered Data
+# Create training and test data frames using the filtered data
+train_df <- as.data.frame(X_train_filtered)
+train_df$Y <- A$Y[train_index]
+
+test_df <- as.data.frame(X_test_filtered)
+colnames(test_df) <- colnames(train_df)[-ncol(train_df)]  # Exclude Y column
+
+# 3. Cross-Validation
+set.seed(123)
+n_folds <- 5
+fold_ids <- sample(rep(1:n_folds, length.out = nrow(train_df)))
+
+cv_results <- data.frame(
+  Fold = integer(),
+  MSE = numeric(),
+  RMSE = numeric(),
+  R2 = numeric()
+)
+
+for (fold in 1:n_folds) {
+  val_indices <- which(fold_ids == fold)
+  train_fold <- train_df[-val_indices, ]
+  val_fold <- train_df[val_indices, ]
+  
+  fold_fit <- lm(Y ~ ., data = train_fold)
+  fold_pred <- predict(fold_fit, newdata = val_fold)
+  
+  fold_mse <- mean((val_fold$Y - fold_pred)^2)
+  cv_results <- rbind(cv_results, data.frame(
+    Fold = fold,
+    MSE = fold_mse,
+    RMSE = sqrt(fold_mse),
+    R2 = 1 - (sum((val_fold$Y - fold_pred)^2) / sum((val_fold$Y - mean(val_fold$Y))^2))
+  ))
+}
+
+# 4. Train Final Model 
+lm_fit <- lm(Y ~ ., data = train_df)
+
+# 5. Model Evaluation 
+cat("\n=== Linear Model Summary ===\n")
+print(summary(lm_fit))
+
+cat("\n=== Cross-Validation Results ===\n")
+print(cv_results)
+cat("\nMean CV MSE:", round(mean(cv_results$MSE), 4))
+cat("\nMean CV RMSE:", round(mean(cv_results$RMSE), 4))
+cat("\nMean CV R-squared:", round(mean(cv_results$R2), 4), "\n")
+
+# Test set evaluation
+test_pred <- predict(lm_fit, newdata = test_df)
+mse_test <- mean((A$Y[-train_index] - test_pred)^2)
+rmse_test <- sqrt(mse_test)
+ss_total <- sum((A$Y[-train_index] - mean(A$Y[-train_index]))^2)
+ss_residual <- sum((A$Y[-train_index] - test_pred)^2)
+r2_test <- 1 - (ss_residual/ss_total)
+
+cat("\n=== Test Set Evaluation ===\n")
+cat("MSE:", round(mse_test, 4), "\n")
+cat("RMSE:", round(rmse_test, 4), "\n")
+cat("R-squared:", round(r2_test, 4), "\n")
+
+# 6. Coefficients 
+cat("\n=== Model Coefficients ===\n")
+coef_df <- data.frame(
+  Feature = names(coef(lm_fit)),  # Use actual model features
+  Coefficient = round(coef(lm_fit), 4),
+  row.names = NULL
+)
+print(coef_df)
+
+cat("\nNumber of coefficients (including intercept):", length(coef(lm_fit)))
+cat("\nNumber of features (excluding intercept):", length(coef(lm_fit))-1, "\n")
+
+```
+
+## 2.3 Variance Inflation Factor (VIF)
+
+```{r}
+
+# 1. VIF-Based Multicollinearity Handling 
+cat("\n=== VIF Analysis ===\n")
+if (!requireNamespace("car", quietly = TRUE)) install.packages("car")
+library(car)
+
+# Function to calculate VIF
+calculate_vif <- function(data) {
+  # Exclude response variable
+  features <- data[, colnames(data) != "Y"]
+  if (ncol(features) < 2) return(NULL)
+  
+  vif_values <- vif(lm(Y ~ ., data = data))
+  data.frame(
+    Feature = names(vif_values),
+    VIF = vif_values,
+    row.names = NULL
+  )
+}
+
+vif_threshold <- 10
+removed_features <- c()
+iteration <- 1
+
+# Create working copy for VIF handling (do not change original scaled data)
+train_vif_df <- as.data.frame(X_train_scaled)
+train_vif_df$Y <- A$Y[train_index]
+
+# Create a new test set variable for VIF handling
+X_test_vif <- X_test_scaled
+
+repeat {
+  cat("\n-- VIF Iteration", iteration, "--\n")
+  vif_results <- calculate_vif(train_vif_df)
+  
+  if (is.null(vif_results) || all(vif_results$VIF <= vif_threshold)) break
+  
+  # Find feature with highest VIF
+  max_vif <- vif_results[which.max(vif_results$VIF), ]
+  cat("Removing feature:", max_vif$Feature, "(VIF =", round(max_vif$VIF, 1), ")\n")
+  
+  # Remove feature from working copy of training data and from new test set variable
+  train_vif_df <- train_vif_df[, !(colnames(train_vif_df) %in% max_vif$Feature)]
+  X_test_vif <- X_test_vif[, !(colnames(X_test_vif) %in% max_vif$Feature)]
+  
+  removed_features <- c(removed_features, max_vif$Feature)
+  iteration <- iteration + 1
+}
+
+if (length(removed_features) > 0) {
+  cat("\nFinal removed features by VIF:", paste(removed_features, collapse = ", "), "\n")
+} else {
+  cat("\nNo features removed by VIF analysis\n")
+}
+
+# 2. Prepare Filtered Data 
+# Create new training and test data frames using the filtered variables
+train_df <- train_vif_df
+test_df <- as.data.frame(X_test_vif)
+colnames(test_df) <- colnames(train_df)[-which(colnames(train_df) == "Y")]
+
+# 3. Cross-Validation
+set.seed(123)
+n_folds <- 5
+fold_ids <- sample(rep(1:n_folds, length.out = nrow(train_df)))
+
+cv_results <- data.frame(
+  Fold = integer(),
+  MSE = numeric(),
+  RMSE = numeric(),
+  R2 = numeric()
+)
+
+for (fold in 1:n_folds) {
+  val_indices <- which(fold_ids == fold)
+  train_fold <- train_df[-val_indices, ]
+  val_fold <- train_df[val_indices, ]
+  
+  fold_fit <- lm(Y ~ ., data = train_fold)
+  fold_pred <- predict(fold_fit, newdata = val_fold)
+  
+  fold_mse <- mean((val_fold$Y - fold_pred)^2)
+  cv_results <- rbind(cv_results, data.frame(
+    Fold = fold,
+    MSE = fold_mse,
+    RMSE = sqrt(fold_mse),
+    R2 = 1 - (sum((val_fold$Y - fold_pred)^2) / sum((val_fold$Y - mean(val_fold$Y))^2))
+  ))
+}
+
+# 4. Train Final Model 
+lm_fit <- lm(Y ~ ., data = train_df)
+
+# 5. Model Evaluation 
+cat("\n=== Linear Model Summary ===\n")
+print(summary(lm_fit))
+
+cat("\n=== Cross-Validation Results ===\n")
+print(cv_results)
+cat("\nMean CV MSE:", round(mean(cv_results$MSE), 4))
+cat("\nMean CV RMSE:", round(mean(cv_results$RMSE), 4))
+cat("\nMean CV R-squared:", round(mean(cv_results$R2), 4), "\n")
+
+# Test set evaluation
+test_pred <- predict(lm_fit, newdata = test_df)
+mse_test <- mean((A$Y[-train_index] - test_pred)^2)
+rmse_test <- sqrt(mse_test)
+ss_total <- sum((A$Y[-train_index] - mean(A$Y[-train_index]))^2)
+ss_residual <- sum((A$Y[-train_index] - test_pred)^2)
+r2_test <- 1 - (ss_residual / ss_total)
+
+cat("\n=== Test Set Evaluation ===\n")
+cat("MSE:", round(mse_test, 4), "\n")
+cat("RMSE:", round(rmse_test, 4), "\n")
+cat("R-squared:", round(r2_test, 4), "\n")
+
+# 6. Coefficients & VIF Report 
+cat("\n=== Final Model Diagnostics ===\n")
+vif_final <- calculate_vif(train_df)
+if (!is.null(vif_final)) {
+  cat("\nVariance Inflation Factors (VIF):\n")
+  print(vif_final)
+}
+
+cat("\n=== Model Coefficients ===\n")
+coef_df <- data.frame(
+  Feature = names(coef(lm_fit)),
+  Coefficient = round(coef(lm_fit), 4),
+  row.names = NULL
+)
+print(coef_df)
+
+cat("\nNumber of coefficients (including intercept):", length(coef(lm_fit)))
+cat("\nNumber of features (excluding intercept):", length(coef(lm_fit)) - 1, "\n")
+
+```
+
+## 2.4 Stepwise Selection
+
+```{r}
+
+# 1. Stepwise Selection-Based Feature Handling 
+
+cat("\n=== Stepwise Selection ===\n")
+
+# Create working copy of the scaled training data and add response variable
+train_df <- as.data.frame(X_train_scaled)
+train_df$Y <- A$Y[train_index]
+
+# Fit the full model using all predictors
+full_model <- lm(Y ~ ., data = train_df)
+
+# Perform stepwise selection (both directions) based on AIC
+step_model <- step(full_model, direction = "both", trace = 1)
+
+# Extract the selected model formula and the corresponding predictors
+selected_formula <- formula(step_model)
+# all.vars() returns all variable names in the formula; remove the response ("Y")
+selected_features <- all.vars(selected_formula)[-1]
+cat("Selected features after stepwise selection:", 
+    paste(selected_features, collapse = ", "), "\n")
+
+# Prepare the filtered training and test sets based on the selected features
+train_df <- train_df[, c("Y", selected_features)]
+test_df <- as.data.frame(X_test_scaled)
+test_df <- test_df[, selected_features]
+
+# 2. Cross-Validation 
+
+set.seed(123)
+n_folds <- 5
+fold_ids <- sample(rep(1:n_folds, length.out = nrow(train_df)))
+
+cv_results <- data.frame(
+  Fold = integer(),
+  MSE = numeric(),
+  RMSE = numeric(),
+  R2 = numeric()
+)
+
+for (fold in 1:n_folds) {
+  val_indices <- which(fold_ids == fold)
+  train_fold <- train_df[-val_indices, ]
+  val_fold <- train_df[val_indices, ]
+  
+  # Fit the model using only the selected features
+  fold_fit <- lm(selected_formula, data = train_fold)
+  fold_pred <- predict(fold_fit, newdata = val_fold)
+  
+  fold_mse <- mean((val_fold$Y - fold_pred)^2)
+  cv_results <- rbind(cv_results, data.frame(
+    Fold = fold,
+    MSE = fold_mse,
+    RMSE = sqrt(fold_mse),
+    R2 = 1 - (sum((val_fold$Y - fold_pred)^2) / sum((val_fold$Y - mean(val_fold$Y))^2))
+  ))
+}
+
+# 3. Train Final Model 
+
+# Train the final model on the full filtered training set using the selected formula
+lm_fit <- lm(selected_formula, data = train_df)
+
+# 4. Model Evaluation 
+
+cat("\n=== Linear Model Summary ===\n")
+print(summary(lm_fit))
+
+cat("\n=== Cross-Validation Results ===\n")
+print(cv_results)
+cat("\nMean CV MSE:", round(mean(cv_results$MSE), 4))
+cat("\nMean CV RMSE:", round(mean(cv_results$RMSE), 4))
+cat("\nMean CV R-squared:", round(mean(cv_results$R2), 4), "\n")
+
+# Test set evaluation
+test_pred <- predict(lm_fit, newdata = test_df)
+mse_test <- mean((A$Y[-train_index] - test_pred)^2)
+rmse_test <- sqrt(mse_test)
+ss_total <- sum((A$Y[-train_index] - mean(A$Y[-train_index]))^2)
+ss_residual <- sum((A$Y[-train_index] - test_pred)^2)
+r2_test <- 1 - (ss_residual / ss_total)
+
+cat("\n=== Test Set Evaluation ===\n")
+cat("MSE:", round(mse_test, 4), "\n")
+cat("RMSE:", round(rmse_test, 4), "\n")
+cat("R-squared:", round(r2_test, 4), "\n")
+
+# 5. Final Model Coefficients Report 
+
+cat("\n=== Final Model Coefficients ===\n")
+coef_df <- data.frame(
+  Feature = names(coef(lm_fit)),
+  Coefficient = round(coef(lm_fit), 4),
+  row.names = NULL
+)
+print(coef_df)
+
+cat("\nNumber of coefficients (including intercept):", length(coef(lm_fit)))
+cat("\nNumber of features (excluding intercept):", length(coef(lm_fit)) - 1, "\n")
+
+```
+
+## 2.5 Principal Component Analysis (PCA)
+
+```{r}
+
+# 1. PCA-Based Dimension Reduction 
+
+cat("\n=== PCA-Based Dimension Reduction ===\n")
+
+# Assume X_train_scaled is a data frame or matrix of scaled predictors.
+# Perform PCA on the training predictors.
+# (If your data is already scaled, set center = TRUE and scale. = FALSE)
+pca_model <- prcomp(X_train_scaled, center = TRUE, scale. = FALSE)
+
+# Calculate the cumulative proportion of variance explained by each PC.
+pca_summary <- summary(pca_model)
+cumulative_var <- pca_summary$importance["Cumulative Proportion", ]
+
+# Select the number of principal components that explain at least 90% of the variance.
+variance_threshold <- 0.90
+n_components <- min(which(cumulative_var >= variance_threshold))
+cat("Number of principal components selected:", n_components, "\n")
+
+# Create the new training dataset using the selected principal components.
+train_pcs <- as.data.frame(pca_model$x[, 1:n_components])
+# Append the response variable.
+train_pcs$Y <- A$Y[train_index]
+
+# Transform the test set using the PCA model.
+test_pcs <- as.data.frame(predict(pca_model, newdata = X_test_scaled)[, 1:n_components])
+
+# 2. Cross-Validation 
+
+set.seed(123)
+n_folds <- 5
+fold_ids <- sample(rep(1:n_folds, length.out = nrow(train_pcs)))
+
+cv_results <- data.frame(
+  Fold = integer(),
+  MSE = numeric(),
+  RMSE = numeric(),
+  R2 = numeric()
+)
+
+for (fold in 1:n_folds) {
+  # Create training and validation folds.
+  val_indices <- which(fold_ids == fold)
+  train_fold <- train_pcs[-val_indices, ]
+  val_fold <- train_pcs[val_indices, ]
+  
+  # Fit the linear model using all selected PCs.
+  fold_fit <- lm(Y ~ ., data = train_fold)
+  fold_pred <- predict(fold_fit, newdata = val_fold)
+  
+  # Compute evaluation metrics.
+  fold_mse <- mean((val_fold$Y - fold_pred)^2)
+  fold_rmse <- sqrt(fold_mse)
+  fold_r2 <- 1 - (sum((val_fold$Y - fold_pred)^2) / sum((val_fold$Y - mean(val_fold$Y))^2))
+  
+  # Append results.
+  cv_results <- rbind(cv_results, data.frame(
+    Fold = fold,
+    MSE = fold_mse,
+    RMSE = fold_rmse,
+    R2 = fold_r2
+  ))
+}
+
+# 3. Train Final Model 
+
+lm_fit <- lm(Y ~ ., data = train_pcs)
+
+# 4. Model Evaluation 
+
+cat("\n=== Linear Model Summary ===\n")
+print(summary(lm_fit))
+
+cat("\n=== Cross-Validation Results ===\n")
+print(cv_results)
+cat("\nMean CV MSE:", round(mean(cv_results$MSE), 4))
+cat("\nMean CV RMSE:", round(mean(cv_results$RMSE), 4))
+cat("\nMean CV R-squared:", round(mean(cv_results$R2), 4), "\n")
+
+# Test set evaluation
+test_pred <- predict(lm_fit, newdata = test_pcs)
+# The test response values are those in A$Y for the indices not in train_index.
+Y_test <- A$Y[-train_index]
+mse_test <- mean((Y_test - test_pred)^2)
+rmse_test <- sqrt(mse_test)
+ss_total <- sum((Y_test - mean(Y_test))^2)
+ss_residual <- sum((Y_test - test_pred)^2)
+r2_test <- 1 - (ss_residual / ss_total)
+
+cat("\n=== Test Set Evaluation ===\n")
+cat("MSE:", round(mse_test, 4), "\n")
+cat("RMSE:", round(rmse_test, 4), "\n")
+cat("R-squared:", round(r2_test, 4), "\n")
+
+# 5. Final Model Coefficients (on Principal Components) 
+
+cat("\n=== Final Model Coefficients (PCA) ===\n")
+coef_df <- data.frame(
+  Predictor = names(coef(lm_fit)),
+  Coefficient = round(coef(lm_fit), 4),
+  row.names = NULL
+)
+print(coef_df)
+
+cat("\nNumber of coefficients (including intercept):", length(coef(lm_fit)))
+cat("\nNumber of principal components used (excluding intercept):", length(coef(lm_fit)) - 1, "\n")
+
+```
+
+## 2.6 Conclusion
+
+```{r}
+
+# Create a data frame with the comparative metrics
+metrics <- data.frame(
+  Model = c("OLS", "Correlation Filtering", "VIF", "Stepwise Selection", "PCA"),
+  CV_MSE   = c(34.5157, 34.5066, 34.5957, 34.2779, 35.0810),
+  CV_RMSE  = c(5.7642, 5.7663, 5.7724, 5.7463, 5.8052),
+  CV_R2    = c(0.5349, 0.5338, 0.5329, 0.5378, 0.5293),
+  Test_MSE = c(27.9471, 28.4852, 28.4570, 27.8327, 44.5091),
+  Test_RMSE= c(5.2865, 5.3372, 5.3345, 5.2757, 6.6715),
+  Test_R2  = c(0.4961, 0.4864, 0.4869, 0.4981, 0.1974)
+)
+
+# Use knitr's kable to display the table nicely
+kable(metrics, digits = 4)
+
+```
+
+```{r}
+# Examine the distribution of the response variable in the training data
+response_summary <- summary(Y_train)
+response_range   <- range(Y_train)
+response_sd      <- sd(Y_train)
+
+cat("Summary of Y (Training):\n")
+print(response_summary)
+cat("\nRange of Y (Training): ", response_range[1], "to", response_range[2], "\n")
+cat("\nStandard Deviation of Y (Training): ", round(response_sd, 4), "\n\n")
+
+# Example metrics from your model:
+test_mse  <- 27.8327
+test_rmse <- 5.2757
+test_r2   <- 0.4981
+
+cat("Model Test Metrics:\n")
+cat("Test MSE:", test_mse, "\n")
+cat("Test RMSE:", test_rmse, "\n")
+cat("Test R-squared:", test_r2, "\n\n")
+
+# Compare RMSE to the range and standard deviation:
+range_diff <- response_range[2] - response_range[1]
+rmse_pct_range <- test_rmse / range_diff * 100
+rmse_pct_sd    <- test_rmse / response_sd * 100
+
+cat("RMSE as a percentage of the response range: ", round(rmse_pct_range, 2), "%\n")
+cat("RMSE as a percentage of the response standard deviation: ", round(rmse_pct_sd, 2), "%\n")
+
+```
+
+Among the various modeling approaches evaluated, **only the stepwise selection method managed to improve the baseline OLS results**. In contrast, both the **correlation filtering** and **VIF-based approaches** resulted in slightly worse performance. Furthermore, the **PCA-based model** demonstrated the poorest performance by a significant margin. These findings suggest that simply deleting correlated features or reducing dimensionality through PCA does not necessarily lead to performance improvements; in fact, it may remove predictive information essential for model generalization.
+
+Based on the results from OLS, Test MSE (27.8327) and Test RMSE (5.2757) are relatively low when considered as a small percentage of the overall range (about 6%). However, since RMSE is about 61% of the standard deviation, there is still a considerable amount of prediction error relative to the natural variability in the response. An R^2 of 0.4981 indicates that the OLS model explains about half of the variance, which is moderate. This might be acceptable in many practical situations but also suggests there is room for improvement.
+
+# 3. Regularized regression models
+
+## 3.1 LASSO model
+
+```{r}
+# 1. Fit LASSO Regression Model 
+set.seed(123)
+lambda_grid <- 10^seq(-3, 0, length = 10)
+
+cv_fit <- cv.glmnet(
+  x = X_train_scaled,
+  y = Y_train,            # Now using A$Y[train_index]
+  family = "gaussian",    # For regression
+  alpha = 1,
+  lambda = lambda_grid,
+  type.measure = "mse",   # Using Mean Squared Error for evaluation
+  nfolds = 5
+)
+
+# 2. Modified Model Summary 
+cat("\n=== Model Fitting Summary ===\n")
+cat("GLMNET Cross-Validation Results:\n")
+cat("Best lambda (lambda.min):", cv_fit$lambda.min, "\n")
+cat("Number of lambda values tested:", length(cv_fit$lambda), "\n")
+cat("Fold count:", cv_fit$nfold, "\n")
+
+# Calculate key metrics.
+min_mse <- min(cv_fit$cvm)
+min_rmse <- sqrt(min_mse)
+max_r2 <- 1 - (min_mse / var(Y_train))
+
+cat("Minimum MSE achieved:", round(min_mse, 4), "\n")
+cat("Minimum RMSE achieved:", round(min_rmse, 4), "\n")
+cat("Maximum R-squared achieved:", round(max_r2, 4), "\n")
+
+# Enhanced printing of CV results.
+cv_results <- data.frame(
+  Lambda = format(round(cv_fit$lambda, 5), scientific = FALSE),
+  MSE = round(cv_fit$cvm, 4),
+  RMSE = round(sqrt(cv_fit$cvm), 4),
+  R2 = round(1 - (cv_fit$cvm / var(Y_train)), 4),
+  SD = round(cv_fit$cvsd, 4)
+)
+
+cat("\nCross-Validation Performance:\n")
+print(cv_results, row.names = FALSE, digits = 4)
+
+# 3. Model Evaluation 
+best_lambda <- cv_fit$lambda.min
+
+# Generate predictions on the test set.
+test_pred <- predict(cv_fit, newx = X_test_scaled, s = best_lambda)
+
+# Calculate test metrics.
+mse_test <- mean((Y_test - test_pred)^2)
+rmse_test <- sqrt(mse_test)
+ss_total <- sum((Y_test - mean(Y_test))^2)
+ss_residual <- sum((Y_test - test_pred)^2)
+r2_test <- 1 - (ss_residual / ss_total)
+
+cat("\n=== Test Set Evaluation ===\n")
+cat("MSE:", round(mse_test, 4), "\n")
+cat("RMSE:", round(rmse_test, 4), "\n")
+cat("R-squared:", round(r2_test, 4), "\n")
+
+# 4. Coefficients 
+final_coef <- coef(cv_fit, s = best_lambda)
+coef_df <- data.frame(
+  Feature = rownames(final_coef),
+  Coefficient = as.numeric(final_coef),
+  row.names = NULL
+)
+
+cat("\n=== Non-Zero Coefficients ===\n")
+print(coef_df[coef_df$Coefficient != 0, ], row.names = FALSE)
+
+non_zero_total <- sum(final_coef != 0)
+non_zero_features <- sum(final_coef[-1] != 0)
+
+cat("\nNon-zero coefficients (including intercept):", non_zero_total, "\n")
+cat("Non-zero coefficients (excluding intercept):", non_zero_features, "\n")
+
+```
+
+## 3.2 RIDGE model
+
+```{r}
+
+# 1. Fit Ridge Regression Model 
+set.seed(123)
+lambda_grid <- 10^seq(-3, 0, length = 10)
+
+cv_fit <- cv.glmnet(
+  x = X_train_scaled,
+  y = Y_train,            # Using A$Y for consistency
+  family = "gaussian",    # For regression
+  alpha = 0,              # Set alpha = 0 for ridge regression
+  lambda = lambda_grid,
+  type.measure = "mse",   # Using Mean Squared Error for evaluation
+  nfolds = 5
+)
+
+# 2. Modified Model Summary 
+cat("\n=== Model Fitting Summary ===\n")
+cat("GLMNET Cross-Validation Results:\n")
+cat("Best lambda (lambda.min):", cv_fit$lambda.min, "\n")
+cat("Number of lambda values tested:", length(cv_fit$lambda), "\n")
+cat("Fold count:", cv_fit$nfold, "\n")
+
+# Calculate key metrics.
+min_mse <- min(cv_fit$cvm)
+min_rmse <- sqrt(min_mse)
+max_r2 <- 1 - (min_mse / var(Y_train))
+
+cat("Minimum MSE achieved:", round(min_mse, 4), "\n")
+cat("Minimum RMSE achieved:", round(min_rmse, 4), "\n")
+cat("Maximum R-squared achieved:", round(max_r2, 4), "\n")
+
+# Enhanced printing of CV results.
+cv_results <- data.frame(
+  Lambda = format(round(cv_fit$lambda, 5), scientific = FALSE),
+  MSE = round(cv_fit$cvm, 4),
+  RMSE = round(sqrt(cv_fit$cvm), 4),
+  R2 = round(1 - (cv_fit$cvm / var(Y_train)), 4),
+  SD = round(cv_fit$cvsd, 4)
+)
+
+cat("\nCross-Validation Performance:\n")
+print(cv_results, row.names = FALSE, digits = 4)
+
+# 3. Model Evaluation 
+best_lambda <- cv_fit$lambda.min
+
+# Generate predictions on the test set.
+test_pred <- predict(cv_fit, newx = X_test_scaled, s = best_lambda)
+
+# Calculate test metrics.
+mse_test <- mean((Y_test - test_pred)^2)
+rmse_test <- sqrt(mse_test)
+ss_total <- sum((Y_test - mean(Y_test))^2)
+ss_residual <- sum((Y_test - test_pred)^2)
+r2_test <- 1 - (ss_residual / ss_total)
+
+cat("\n=== Test Set Evaluation ===\n")
+cat("MSE:", round(mse_test, 4), "\n")
+cat("RMSE:", round(rmse_test, 4), "\n")
+cat("R-squared:", round(r2_test, 4), "\n")
+
+# 4. Coefficients 
+final_coef <- coef(cv_fit, s = best_lambda)
+coef_df <- data.frame(
+  Feature = rownames(final_coef),
+  Coefficient = as.numeric(final_coef),
+  row.names = NULL
+)
+
+cat("\n=== Non-Zero Coefficients ===\n")
+print(coef_df[coef_df$Coefficient != 0, ], row.names = FALSE)
+
+non_zero_total <- sum(final_coef != 0)
+non_zero_features <- sum(final_coef[-1] != 0)
+
+cat("\nNon-zero coefficients (including intercept):", non_zero_total, "\n")
+cat("Non-zero coefficients (excluding intercept):", non_zero_features, "\n")
+
+```
+
+## 3.3 Elastic Net model
+
+```{r}
+
+# 1. Fit Elastic Net Regression Model with Alpha Grid 
+set.seed(123)
+lambda_grid <- 10^seq(-3, 0, length = 10)
+alpha_grid  <- c(0.2, 0.5, 0.8)  # Candidate alpha values for elastic net
+
+# Initialize variables to store the best results.
+best_mse    <- Inf
+best_alpha  <- NA
+best_lambda <- NA
+best_cv_fit <- NULL
+cv_results  <- data.frame()
+
+# Loop over candidate alpha values.
+for(alpha in alpha_grid) {
+  cv_fit <- cv.glmnet(
+    x = X_train_scaled,
+    y = Y_train,            # Using A$Y for consistency
+    family = "gaussian",    # For regression
+    alpha = alpha,          # Elastic net mixing parameter
+    lambda = lambda_grid,
+    type.measure = "mse",   # Using Mean Squared Error for evaluation
+    nfolds = 5
+  )
+  
+  # Store the CV results for this alpha.
+  tmp <- data.frame(
+    Alpha  = rep(alpha, length(cv_fit$lambda)),
+    Lambda = cv_fit$lambda,
+    MSE    = cv_fit$cvm,
+    RMSE   = sqrt(cv_fit$cvm),
+    R2     = 1 - (cv_fit$cvm / var(Y_train)),
+    SD     = cv_fit$cvsd
+  )
+  cv_results <- rbind(cv_results, tmp)
+  
+  # Identify the minimum MSE for the current alpha.
+  current_mse <- min(cv_fit$cvm)
+  
+  if(current_mse < best_mse) {
+    best_mse    <- current_mse
+    best_alpha  <- alpha
+    best_lambda <- cv_fit$lambda.min
+    best_cv_fit <- cv_fit
+  }
+}
+
+# 2. Modified Model Summary 
+cat("\n=== Model Fitting Summary ===\n")
+cat("Best alpha:", best_alpha, "\n")
+cat("Best lambda (lambda.min):", best_lambda, "\n")
+cat("Number of lambda values tested:", length(lambda_grid), "\n")
+cat("Fold count:", best_cv_fit$nfold, "\n")
+
+# Calculate key metrics.
+min_mse  <- best_mse
+min_rmse <- sqrt(best_mse)
+max_r2   <- 1 - (best_mse / var(Y_train))
+
+cat("Minimum MSE achieved:", round(min_mse, 4), "\n")
+cat("Minimum RMSE achieved:", round(min_rmse, 4), "\n")
+cat("Maximum R-squared achieved:", round(max_r2, 4), "\n")
+
+cat("\nCross-Validation Performance:\n")
+print(cv_results, row.names = FALSE, digits = 4)
+
+# 3. Model Evaluation 
+# Generate predictions on the test set using the best parameters.
+test_pred <- predict(best_cv_fit, newx = X_test_scaled, s = best_lambda)
+
+# Calculate test metrics.
+mse_test    <- mean((Y_test - test_pred)^2)
+rmse_test   <- sqrt(mse_test)
+ss_total    <- sum((Y_test - mean(Y_test))^2)
+ss_residual <- sum((Y_test - test_pred)^2)
+r2_test     <- 1 - (ss_residual / ss_total)
+
+cat("\n=== Test Set Evaluation ===\n")
+cat("MSE:", round(mse_test, 4), "\n")
+cat("RMSE:", round(rmse_test, 4), "\n")
+cat("R-squared:", round(r2_test, 4), "\n")
+
+# 4. Coefficients 
+final_coef <- coef(cv_fit, s = best_lambda)
+coef_df <- data.frame(
+  Feature = rownames(final_coef),
+  Coefficient = as.numeric(final_coef),
+  row.names = NULL
+)
+
+cat("\n=== Non-Zero Coefficients ===\n")
+print(coef_df[coef_df$Coefficient != 0, ], row.names = FALSE)
+
+non_zero_total <- sum(final_coef != 0)
+non_zero_features <- sum(final_coef[-1] != 0)
+
+cat("\nNon-zero coefficients (including intercept):", non_zero_total, "\n")
+cat("Non-zero coefficients (excluding intercept):", non_zero_features, "\n")
+
+```
+
+## 3.4 Conclusion
+
+```{r}
+
+# Create a data frame with the comparative metrics
+metrics <- data.frame(
+  Model                = c("Lasso", "Ridge", "Elastic Net"),
+  Best_Lambda          = c(0.002154435, 0.4641589, 0.001),
+  Best_Alpha           = c(NA, NA, 0.5),  # Only applicable for Elastic Net
+  CV_MSE               = c(34.5082, 34.4102, 33.753),
+  CV_RMSE              = c(5.8744, 5.8660, 5.8097),
+  CV_R2                = c(0.5364, 0.5377, 0.5466),
+  Test_MSE             = c(27.9424, 28.1332, 27.9483),
+  Test_RMSE            = c(5.2861, 5.3041, 5.2866),
+  Test_R2              = c(0.4961, 0.4927, 0.4960),
+  NonZero_Coefficients = c(17, 17, 17)  # Excluding the intercept
+)
+
+# Display the table nicely using knitr's kable
+kable(metrics, digits = 4)
+
+```
+
+The results show that all three models (lasso, ridge, and elastic net) exhibit similar performance in terms of both cross-validation and test-set metrics. One particularly interesting observation is that neither lasso nor elastic net reduced the number of features: all models ended up with 17 non-zero predictors (excluding the intercept). In this case the chosen regularization parameters did not force any coefficients out of the model, suggesting that every predictor contributes meaningfully to the model's performance.
+
+# 4. CART and Random Forest models
+
+## 4.1 Basic RPART
+
+```{r}
+
+# 1. Create train_df 
+
+# Create working copy of the scaled training data and add response variable
+train_df <- as.data.frame(X_train_scaled)
+train_df$Y <- A$Y[train_index]
+
+# Prepare test data frame with same structure
+test_df <- as.data.frame(X_test_scaled)
+colnames(test_df) <- colnames(train_df)[-ncol(train_df)]  # Exclude Y column
+
+# 2. Cross-Validation: MSE, RMSE, and R-squared Calculation for Regression Tree
+
+set.seed(123)
+# Create 5 folds using the number of rows in train_df
+folds <- cut(seq(1, nrow(train_df)), breaks = 5, labels = FALSE)
+
+# Initialize vectors to store metrics for each fold
+cv_mse  <- numeric(5)  # Mean Squared Error for each fold
+cv_rmse <- numeric(5)  # Root Mean Squared Error for each fold
+cv_r2   <- numeric(5)  # R-squared for each fold
+
+for (i in 1:5) {
+  # Identify indices for the current fold (validation set)
+  val_idx <- which(folds == i)
+  
+  # Create validation set (predictors and target)
+  X_val <- train_df[val_idx, names(train_df) != "Y", drop = FALSE]
+  Y_val <- train_df$Y[val_idx]
+  
+  # Create training set for this fold
+  X_tr <- train_df[-val_idx, names(train_df) != "Y", drop = FALSE]
+  Y_tr <- train_df$Y[-val_idx]
+  
+  # Combine predictors and target for training fold into one data frame
+  train_fold_df <- data.frame(X_tr, Y = Y_tr)
+  
+  # Train a regression tree on the training subset (method = "anova" for regression)
+  fold_model <- rpart(
+    formula = Y ~ .,
+    data = train_fold_df,
+    method = "anova",
+    control = rpart.control(
+      cp = 0.0001,
+      minsplit = 5,
+      minbucket = 10,
+      maxdepth = 8
+    )
+  )
+  
+  # Predict on the validation set (numeric predictions)
+  val_pred <- predict(fold_model, newdata = X_val)
+  
+  # Calculate regression metrics for this fold
+  mse_val  <- mean((Y_val - val_pred)^2)
+  rmse_val <- sqrt(mse_val)
+  r2_val   <- 1 - sum((Y_val - val_pred)^2) / sum((Y_val - mean(Y_val))^2)
+  
+  cv_mse[i]  <- mse_val
+  cv_rmse[i] <- rmse_val
+  cv_r2[i]   <- r2_val
+}
+
+# Compute mean cross-validation metrics
+mean_cv_mse  <- mean(cv_mse)
+mean_cv_rmse <- mean(cv_rmse)
+mean_cv_r2   <- mean(cv_r2)
+
+# Print cross-validation results
+cat("\n=== Cross-Validation Results ===\n")
+cat("Mean Cross-Validation MSE:", round(mean_cv_mse, 4), "\n")
+cat("Mean Cross-Validation RMSE:", round(mean_cv_rmse, 4), "\n")
+cat("Mean Cross-Validation R-squared:", round(mean_cv_r2, 4), "\n")
+
+# 3. Fit RPART Regression Model on Full Training Data
+
+set.seed(123)
+tree_model <- rpart(
+  formula = Y ~ .,
+  data = train_df,
+  method = "anova",  # Regression tree
+  control = rpart.control(
+    xval = 5,        # 5-fold cross-validation for internal error estimation
+    cp = 0.0001,     # Initial complexity parameter
+    minsplit = 5,    # Minimum samples required to attempt a split
+    minbucket = 10,  # Minimum samples in any terminal node
+    maxdepth = 8     # Maximum depth of the tree
+  )
+)
+
+cat("\n=== RPART Model Summary ===\n")
+printcp(tree_model)
+
+# Plot the complexity parameter (CP) table
+plotcp(tree_model)
+
+# Get the optimal CP (the one that minimizes the cross-validated error)
+optimal_cp <- tree_model$cptable[which.min(tree_model$cptable[,"xerror"]), "CP"]
+
+# Prune the tree using the optimal CP value
+pruned_tree <- prune(tree_model, cp = optimal_cp)
+cat("\nOptimal Complexity Parameter (CP):", optimal_cp, "\n")
+cat("Final Tree Size:", nrow(pruned_tree$frame), "nodes\n")
+
+# 4. Model Evaluation on Test Set
+
+# Predict on the test set using the pruned tree (test_df contains only predictors)
+test_pred <- predict(pruned_tree, newdata = test_df)
+
+# Calculate regression metrics on the test set
+mse_test    <- mean((Y_test - test_pred)^2)
+rmse_test   <- sqrt(mse_test)
+ss_total    <- sum((Y_test - mean(Y_test))^2)
+ss_residual <- sum((Y_test - test_pred)^2)
+r2_test     <- 1 - (ss_residual / ss_total)
+
+cat("\n=== Test Set Evaluation ===\n")
+cat("MSE:", round(mse_test, 4), "\n")
+cat("RMSE:", round(rmse_test, 4), "\n")
+cat("R-squared:", round(r2_test, 4), "\n")
+
+# 5. Tree Visualization & Variable Importance
+
+cat("\n=== Variable Importance ===\n")
+imp <- pruned_tree$variable.importance
+print(sort(imp, decreasing = TRUE))
+
+cat("\n=== Decision Tree Structure ===\n")
+library(rpart.plot)
+prp(pruned_tree, 
+    extra = 101,       # For regression trees: displays predicted values at the nodes
+    nn = TRUE,         # Show node numbers
+    fallen.leaves = TRUE,
+    shadow.col = "gray",
+    box.palette = "GnBu")
+
+```
+
+## 4.2 Fine-tuned RPART
+
+```{r}
+
+# 1. Create train_df 
+
+# Create working copy of the scaled training data and add response variable
+train_df <- as.data.frame(X_train_scaled)
+train_df$Y <- A$Y[train_index]
+
+# Prepare test data frame with same structure
+test_df <- as.data.frame(X_test_scaled)
+colnames(test_df) <- colnames(train_df)[-ncol(train_df)]  # Exclude Y column
+
+# 2. Cross-Validation: Regression Tree Metrics
+
+set.seed(123)
+# Create 5 folds using the number of rows in train_df
+folds <- cut(seq(1, nrow(train_df)), breaks = 5, labels = FALSE)
+
+# Initialize vectors to store metrics for each fold
+cv_mse  <- numeric(5)  # Mean Squared Error
+cv_rmse <- numeric(5)  # Root Mean Squared Error
+cv_r2   <- numeric(5)  # R-squared
+
+for (i in 1:5) {
+  # Indices for validation set in fold i
+  val_idx <- which(folds == i)
+  
+  # Extract validation predictors and target (exclude the target column for predictors)
+  X_val <- train_df[val_idx, names(train_df) != "Y", drop = FALSE]
+  Y_val <- train_df$Y[val_idx]
+  
+  # Extract training fold predictors and target
+  X_tr <- train_df[-val_idx, names(train_df) != "Y", drop = FALSE]
+  Y_tr <- train_df$Y[-val_idx]
+  
+  # Combine predictors and target into a training data frame for this fold
+  train_fold_df <- data.frame(X_tr, Y = Y_tr)
+  
+  # Train a regression tree (anova method) on the training subset
+  fold_model <- rpart(
+    formula = Y ~ .,
+    data = train_fold_df,
+    method = "anova",
+    control = rpart.control(
+      cp = 0.0001,
+      minsplit = 5,
+      minbucket = 10,
+      maxdepth = 8
+    )
+  )
+  
+  # Predict on the validation set (numeric predictions)
+  val_pred <- predict(fold_model, newdata = X_val)
+  
+  # Calculate regression metrics for this fold
+  mse_val  <- mean((Y_val - val_pred)^2)
+  rmse_val <- sqrt(mse_val)
+  r2_val   <- 1 - sum((Y_val - val_pred)^2) / sum((Y_val - mean(Y_val))^2)
+  
+  cv_mse[i]  <- mse_val
+  cv_rmse[i] <- rmse_val
+  cv_r2[i]   <- r2_val
+}
+
+# Compute mean cross-validation metrics
+mean_cv_mse  <- mean(cv_mse)
+mean_cv_rmse <- mean(cv_rmse)
+mean_cv_r2   <- mean(cv_r2)
+
+cat("\n=== Cross-Validation Results ===\n")
+cat("Mean Cross-Validation MSE:", round(mean_cv_mse, 4), "\n")
+cat("Mean Cross-Validation RMSE:", round(mean_cv_rmse, 4), "\n")
+cat("Mean Cross-Validation R-squared:", round(mean_cv_r2, 4), "\n")
+
+# 3. Fit RPART Regression Model on Training Data
+
+set.seed(123)
+tree_model <- rpart(
+  formula = Y ~ .,
+  data = train_df,
+  method = "anova",  # Regression tree
+  control = rpart.control(
+    xval = 5,        # 5-fold cross-validation for internal error estimation
+    cp = 0.0001,     # Initial complexity parameter
+    minsplit = 5,    # Minimum samples to attempt a split
+    minbucket = 10,  # Minimum samples in terminal nodes
+    maxdepth = 8     # Maximum depth of the tree
+  )
+)
+
+cat("\n=== RPART Model Summary ===\n")
+printcp(tree_model)
+
+# Plot the CP table
+plotcp(tree_model)
+
+# 4. Pruning the Tree Using the One Standard Error Rule
+
+# Extract the CP table from the model
+cptable <- tree_model$cptable
+
+# Find the minimum cross-validated error (xerror) and its standard error (xstd)
+min_xerror     <- min(cptable[, "xerror"])
+min_xerror_std <- cptable[which.min(cptable[, "xerror"]), "xstd"]
+
+# Define the threshold as one standard error above the minimum error
+cp_threshold <- min_xerror + min_xerror_std
+
+# Identify the smallest tree (largest CP) with xerror below the threshold
+oneSE_index <- which(cptable[, "xerror"] <= cp_threshold)[1]
+optimal_cp <- cptable[oneSE_index, "CP"]
+
+# Prune the tree using the optimal CP from the one standard error rule
+pruned_tree <- prune(tree_model, cp = optimal_cp)
+cat("\nOne Standard Error Optimal Complexity Parameter (CP):", optimal_cp, "\n")
+cat("Final Tree Size:", nrow(pruned_tree$frame), "nodes\n")
+
+# 5. Model Evaluation on Test Set
+
+# Predict on the test set using the pruned tree (test_df contains predictors only)
+test_pred <- predict(pruned_tree, newdata = test_df)
+
+# Calculate regression metrics on the test set
+mse_test    <- mean((Y_test - test_pred)^2)
+rmse_test   <- sqrt(mse_test)
+ss_total    <- sum((Y_test - mean(Y_test))^2)
+ss_residual <- sum((Y_test - test_pred)^2)
+r2_test     <- 1 - (ss_residual / ss_total)
+
+cat("\n=== Test Set Evaluation ===\n")
+cat("MSE:", round(mse_test, 4), "\n")
+cat("RMSE:", round(rmse_test, 4), "\n")
+cat("R-squared:", round(r2_test, 4), "\n")
+
+# 6. Tree Visualization & Variable Importance
+
+cat("\n=== Variable Importance ===\n")
+imp <- pruned_tree$variable.importance
+print(sort(imp, decreasing = TRUE))
+
+cat("\n=== Decision Tree Structure ===\n")
+library(rpart.plot)
+prp(pruned_tree, 
+    extra = 101,       # For regression trees: display predicted values at nodes
+    nn = TRUE,         # Show node numbers
+    fallen.leaves = TRUE,
+    shadow.col = "gray",
+    box.palette = "GnBu")
+
+```
+
+## 4.3 Basic Random forest
+
+```{r}
+
+# 1. Create train_df 
+
+# Create working copy of the scaled training data and add response variable
+train_df <- as.data.frame(X_train_scaled)
+train_df$Y <- A$Y[train_index]
+
+# Prepare test data frame with same structure
+test_df <- as.data.frame(X_test_scaled)
+colnames(test_df) <- colnames(train_df)[-ncol(train_df)]  # Exclude Y column
+
+# 2. Fit Random Forest Model with Cross-Validation (Regression)
+
+set.seed(123)
+
+# Use the number of rows in train_df (which includes Y)
+n <- nrow(train_df)
+k <- 5  # number of folds
+
+# Create indices for k-fold cross-validation
+fold_indices <- split(sample(n), rep(1:k, length.out = n))
+
+# Initialize vectors to store regression performance metrics for each fold
+cv_mse  <- numeric(k)   # Mean Squared Error
+cv_rmse <- numeric(k)   # Root Mean Squared Error
+cv_r2   <- numeric(k)   # R-squared
+
+for (i in 1:k) {
+  # Indices for validation fold i and the remaining for training
+  val_fold_index   <- fold_indices[[i]]
+  train_fold_index <- setdiff(1:n, val_fold_index)
+  
+  # Create training and validation sets from train_df
+  train_fold_df <- train_df[train_fold_index, ]
+  val_fold_df   <- train_df[val_fold_index, ]
+  
+  # Train the Random Forest regression model
+  # Note: Use mtry = sqrt(p) where p = number of predictors; here, p = (ncol(train_fold_df) - 1)
+  rf_model <- randomForest(
+    formula = Y ~ .,
+    data = train_fold_df,
+    importance = TRUE,
+    ntree = 500,
+    mtry = floor(sqrt(ncol(train_fold_df) - 1)),
+    nodesize = 5
+  )
+  
+  # Predict numeric responses on the validation set
+  val_pred <- predict(rf_model, newdata = val_fold_df)
+  
+  # Extract actual values
+  Y_val <- val_fold_df$Y
+  
+  # Calculate regression metrics for this fold
+  mse_val  <- mean((Y_val - val_pred)^2)
+  rmse_val <- sqrt(mse_val)
+  r2_val   <- 1 - sum((Y_val - val_pred)^2) / sum((Y_val - mean(Y_val))^2)
+  
+  cv_mse[i]  <- mse_val
+  cv_rmse[i] <- rmse_val
+  cv_r2[i]   <- r2_val
+}
+
+# Compute average performance metrics across folds
+mean_cv_mse  <- mean(cv_mse)
+mean_cv_rmse <- mean(cv_rmse)
+mean_cv_r2   <- mean(cv_r2)
+
+cat("\n=== Cross-Validation Results (Regression) ===\n")
+cat("Mean CV MSE:", round(mean_cv_mse, 4), "\n")
+cat("Mean CV RMSE:", round(mean_cv_rmse, 4), "\n")
+cat("Mean CV R-squared:", round(mean_cv_r2, 4), "\n")
+
+# 3. Final Random Forest Regression Model on Full Training Set
+
+set.seed(123)
+final_rf_model <- randomForest(
+  formula = Y ~ .,
+  data = train_df,
+  importance = TRUE,
+  ntree = 500,
+  mtry = floor(sqrt(ncol(train_df) - 1)),
+  nodesize = 5
+)
+
+# 4. Final Model Evaluation on Test Set
+
+# Predict responses on the test set (test_df contains only predictors)
+test_pred <- predict(final_rf_model, newdata = test_df)
+
+# Calculate regression metrics on the test set
+mse_test    <- mean((Y_test - test_pred)^2)
+rmse_test   <- sqrt(mse_test)
+ss_total    <- sum((Y_test - mean(Y_test))^2)
+ss_residual <- sum((Y_test - test_pred)^2)
+r2_test     <- 1 - (ss_residual / ss_total)
+
+cat("\n=== Test Set Evaluation (Regression) ===\n")
+cat("Test MSE:", round(mse_test, 4), "\n")
+cat("Test RMSE:", round(rmse_test, 4), "\n")
+cat("Test R-squared:", round(r2_test, 4), "\n")
+
+# 5. Plot Variable Importance
+
+cat("\n=== Variable Importance ===\n")
+varImpPlot(final_rf_model, main = "Variable Importance Plot")
+
+```
+
+## 4.4 Random forest with VSURF
+
+```{r}
+
+# 1. Create train_df 
+
+# Create working copy of the scaled training data and add response variable
+train_df <- as.data.frame(X_train_scaled)
+train_df$Y <- A$Y[train_index]
+
+# Prepare test data frame with same structure
+test_df <- as.data.frame(X_test_scaled)
+colnames(test_df) <- colnames(train_df)[-ncol(train_df)]  # Exclude Y column
+
+# Define predictor names as all columns except "Y"
+predictor_names <- setdiff(colnames(train_df), "Y")
+
+# Prepare test_df with these predictor names.
+test_df <- as.data.frame(X_test_scaled)
+colnames(test_df) <- predictor_names
+
+# 2. Random Forest Cross-Validation for Regression
+
+set.seed(123)
+k <- 5
+n <- nrow(train_df)
+fold_indices <- split(sample(n), rep(1:k, length.out = n))
+
+# Initialize vectors for regression metrics
+mse_scores  <- numeric(k)
+rmse_scores <- numeric(k)
+r2_scores   <- numeric(k)
+
+for (i in 1:k) {
+  # Get indices for validation and training folds
+  val_idx   <- fold_indices[[i]]
+  train_idx <- setdiff(1:n, val_idx)
+  
+  # Subset the data
+  train_fold_df <- train_df[train_idx, ]
+  val_fold_df   <- train_df[val_idx, ]
+  
+  # Train the Random Forest regression model
+  rf_model <- randomForest(
+    formula = Y ~ .,
+    data = train_fold_df,
+    importance = TRUE,
+    ntree = 500,
+    mtry = floor(sqrt(ncol(train_fold_df) - 1)),  # subtract 1 for Y
+    nodesize = 5
+  )
+  
+  # Predict on the validation set
+  val_pred <- predict(rf_model, newdata = val_fold_df)
+  Y_val <- val_fold_df$Y
+  
+  # Calculate metrics for this fold
+  mse_scores[i]  <- mean((Y_val - val_pred)^2)
+  rmse_scores[i] <- sqrt(mse_scores[i])
+  r2_scores[i]   <- 1 - sum((Y_val - val_pred)^2) / sum((Y_val - mean(Y_val))^2)
+}
+
+# Average the metrics across folds
+mean_mse  <- mean(mse_scores)
+mean_rmse <- mean(rmse_scores)
+mean_r2   <- mean(r2_scores)
+
+cat("\n=== Cross-Validation Results (Regression) ===\n")
+cat("Mean MSE:", round(mean_mse, 4), "\n")
+cat("Mean RMSE:", round(mean_rmse, 4), "\n")
+cat("Mean R-squared:", round(mean_r2, 4), "\n")
+
+# 3. Feature Selection using VSURF for Regression
+
+# Apply VSURF to the predictors (all columns except Y) in train_df
+vsurf_result <- VSURF(train_df[, predictor_names, drop = FALSE], train_df$Y, parallel = TRUE, ntree = 500)
+
+# Extract selected variables from VSURF
+selected_vars <- vsurf_result$varselect.interp
+
+# If VSURF returns numeric indices, convert them to column names.
+if (is.numeric(selected_vars)) {
+  selected_vars <- colnames(train_df)[selected_vars]
+}
+
+# Ensure that only predictors present in test_df are used
+selected_vars <- intersect(selected_vars, predictor_names)
+
+# If no variables were selected, revert to using all predictors.
+if (length(selected_vars) == 0) {
+  cat("No variables were selected by VSURF. Using all predictors.\n")
+  selected_vars <- predictor_names
+}
+
+# Subset the data to include only the selected predictors.
+train_df_selected <- train_df[, c(selected_vars, "Y"), drop = FALSE]
+test_df_selected  <- test_df[, selected_vars, drop = FALSE]
+
+# 4. Final Random Forest Regression Model on Full Training Set
+
+set.seed(123)
+final_rf_model <- randomForest(
+  formula = Y ~ .,
+  data = train_df_selected,
+  importance = TRUE,
+  ntree = 500,
+  mtry = floor(sqrt(ncol(train_df_selected) - 1)),  # subtract 1 for Y
+  nodesize = 5
+)
+
+# Predict on the test set using the final model
+test_pred <- predict(final_rf_model, newdata = test_df_selected)
+
+# Compute regression metrics on the test set
+test_mse    <- mean((Y_test - test_pred)^2)
+test_rmse   <- sqrt(test_mse)
+ss_total    <- sum((Y_test - mean(Y_test))^2)
+ss_residual <- sum((Y_test - test_pred)^2)
+test_r2     <- 1 - (ss_residual / ss_total)
+
+cat("\n=== Test Set Evaluation (Regression) ===\n")
+cat("Test MSE:", round(test_mse, 4), "\n")
+cat("Test RMSE:", round(test_rmse, 4), "\n")
+cat("Test R-squared:", round(test_r2, 4), "\n")
+
+# 5. Plot Variable Importance
+
+cat("\n=== Variable Importance ===\n")
+varImpPlot(final_rf_model, main = "Variable Importance Plot")
+
+```
+## 4.5 Conclusion
+
+```{r}
+
+# Create a data frame with the comparative metrics
+# (The numbers are taken from the new outputs provided.)
+metrics <- data.frame(
+  Model = c("Basic rpart", "Fine-tuned rpart", "Basic random forest", "Random forest with VSURF"),
+  CV_MSE   = c(54.0182, 54.0182, 32.1680, 32.1680),
+  CV_RMSE  = c(7.2328, 7.2328, 5.5379, 5.5379),
+  CV_R2    = c(0.2399, 0.2399, 0.5766, 0.5766),
+  Test_MSE = c(39.0057, 45.6268, 26.3880, 27.4477),
+  Test_RMSE= c(6.2455, 6.7548, 5.1369, 5.2391),
+  Test_R2  = c(0.2967, 0.1773, 0.5242, 0.5051)
+)
+
+# Display the table with 4 decimal places
+kable(metrics, digits = 4)
+
+```
+
+The performance comparison shows that the random forest models outperform the decision tree models. Both versions of the random forest (basic and VSURF-enhanced) have lower cross-validation and test MSE as well as higher R-squared values compared to the rpart models. Notably, the basic random forest achieves the best performance on the test set with a Test MSE of 26.388 and a Test RÂ² of 0.5242, indicating that ensemble methods capture the underlying patterns more effectively. 
+
+On the other hand, while the fine-tuned rpart model (with only 5 nodes) offers a simpler and more interpretable tree structure, its test performance (Test RÂ² of 0.1773) is considerably poorer than that of the more complex basic rpart model (Test RÂ² of 0.2967). This suggests that in this case, the additional complexity in the basic rpart tree is beneficial for prediction. 
+
+# 5. Overall Conclusion
+
+```{r}
+# Create a data frame with the comparative metrics for the three models
+metrics <- data.frame(
+  Model = c("Stepwise Selection", "Lasso", "Basic random forest"),
+  `CV MSE` = c(34.2779, 34.5082, 32.1680),
+  `CV RMSE` = c(5.7463, 5.8744, 5.5379),
+  `CV RÂ²` = c(0.5378, 0.5364, 0.5766),
+  `Test MSE` = c(27.8327, 27.9424, 26.3880),
+  `Test RMSE` = c(5.2757, 5.2861, 5.1369),
+  `Test RÂ²` = c(0.4981, 0.4961, 0.5242),
+  check.names = FALSE  # This keeps the column names as specified (with spaces)
+)
+
+# Print the resulting data frame
+print(metrics)
+
+```
+
+While the enhancements achieved by Stepwise Selection and Lasso over the basic OLS model are minimal, the Basic random forest offers the best performance among the compared models. However, even this improvement is moderate, indicating that while the random forest does yield better predictive accuracy, the gains are not extraordinarily large. It's worth noting that the concept of the reduction of the number of features is not very efficient for this dataset. Even within the random forest models, employing a variable selection method such as VSURF resulted in worse performance compared to the Basic random forest. This reinforces the idea that with a relatively small set of predictors, using all available features can be more effective than reducing the feature set.
+
+# Task 3: Cross-Validation Function for OLS vs CART
+**Task statement.** Implement a function that computes cross-validation error to compare a linear model fitted with ordinary least squares and a CART model.
+
+Below is a sample function to perform cross-validation error to compare the linear model
+computed thanks to ordinary least-square and CART algorithm
+
+```{r, echo=TRUE}
+cv_compare <- function(formula, data, k = 10, seed = NULL, 
+                      loss = function(y, pred) mean((y - pred)^2)) {
+    # Check if rpart package is installed
+    if (!requireNamespace("rpart", quietly = TRUE)) {
+        stop("Package 'rpart' is required for CART. Please install it.")
+    }
+    
+    # Set seed for reproducibility if provided
+    if (!is.null(seed)) {
+        set.seed(seed)
+    }
+    
+    # Number of observations
+    n <- nrow(data)
+    if (k > n) {
+        stop("Number of folds 'k' cannot exceed the number of observations.")
+    }
+    
+    # Create folds
+    folds <- sample(rep(1:k, length.out = n))
+    
+    # Initialize vectors to store errors
+    ols_errors <- numeric(k)
+    cart_errors <- numeric(k)
+    
+    # Perform k-fold cross-validation
+    for (i in 1:k) {
+        # Split data into training and test sets
+        test_indices <- which(folds == i)
+        train_data <- data[-test_indices, ]
+        test_data <- data[test_indices, ]
+        
+        # Fit OLS model and compute error
+        lm_model <- lm(formula, data = train_data)
+        pred_lm <- predict(lm_model, newdata = test_data)
+        y_test <- model.response(model.frame(formula, test_data))
+        ols_errors[i] <- loss(y_test, pred_lm)
+        
+        # Fit CART model and compute error
+        cart_model <- rpart::rpart(formula, data = train_data, method = "anova")
+        pred_cart <- predict(cart_model, newdata = test_data)
+        cart_errors[i] <- loss(y_test, pred_cart)
+    }
+    
+    # Return results
+    list(
+        ols_cv_error = mean(ols_errors),
+        cart_cv_error = mean(cart_errors),
+        ols_errors_per_fold = ols_errors,
+        cart_errors_per_fold = cart_errors
+    )
+}
+```
+
