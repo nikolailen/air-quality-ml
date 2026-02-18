@@ -2,7 +2,7 @@
 
 ![Language: R](https://img.shields.io/badge/language-R-276DC3?logo=r&logoColor=white)
 
-🌐 [Project page](https://nikolailen.github.io/air-quality-ml-r/)  
+🌐 [Project page](https://nikolailen.github.io/air-quality-ml/)  
 👤 Project contact: [Nikolai Len](https://www.linkedin.com/in/niklen/)  
 📄 [Documentation](./air-quality-modeling-research-2025.pdf)
 
@@ -14,14 +14,14 @@ This repository contains a reproducible R research project on air quality modeli
 - ozone concentration modeling with constrained vs unconstrained regression
 - PM10 pollution modeling with multiple statistical and machine learning approaches
 
-The project is packaged for GitHub Pages and includes a full report mirror in `index.md`.
+The repository includes a full Markdown mirror of the report in `index.md` and the full PDF report in `air-quality-modeling-research-2025.pdf`.
 
 ## Objectives
 
 - Compare constrained and unconstrained linear regression for ozone data.
 - Benchmark multiple model families for classification and regression tasks.
 - Evaluate model quality with train/test split and cross-validation.
-- Present reproducible outputs in R Markdown, PDF, and GitHub Pages Markdown.
+- Publish reproducible outputs in R Markdown, Markdown, and PDF.
 
 ## Methods Covered
 
@@ -36,11 +36,9 @@ The project is packaged for GitHub Pages and includes a full report mirror in `i
 ## Datasets
 
 - `ozone_air_quality_data.csv`
-  - Ozone-focused dataset (renamed from the original source file)
+  - Ozone-focused dataset used for constrained vs unconstrained modeling.
 - `advanced_classification_data.RData`
-  - Classification dataset containing object `A` with `X` and `Y`
-- `archive/`
-  - Original task files, prior exercise Rmd/PDF files, and source statement PDF
+  - Classification dataset containing object `A` with `X` and `Y`.
 
 ## Repository Structure
 
@@ -49,13 +47,13 @@ The project is packaged for GitHub Pages and includes a full report mirror in `i
 ├── air-quality-modeling-research-2025.Rmd
 ├── air-quality-modeling-research-2025.pdf
 ├── index.md
+├── index_files/
 ├── README.md
 ├── LICENSE
 ├── ozone_air_quality_data.csv
 ├── advanced_classification_data.RData
-├── scripts/
-│   └── build_index_from_rmd.R
-└── archive/
+└── scripts/
+    └── build_index_from_rmd.R
 ```
 
 ## Reproducibility
@@ -67,7 +65,7 @@ The project is packaged for GitHub Pages and includes a full report mirror in `i
   - `rmarkdown`, `knitr`
   - `restriktor`, `ggplot2`, `glmnet`
   - `rpart`, `rpart.plot`, `randomForest`, `VSURF`
-  - `pROC`, `corrplot`, `knitr`, `car`
+  - `pROC`, `corrplot`, `car`
 
 ### Build Commands
 
@@ -77,19 +75,11 @@ Render the PDF report:
 Rscript -e "rmarkdown::render('air-quality-modeling-research-2025.Rmd')"
 ```
 
-Build GitHub Pages `index.md` from the Rmd:
+Build `index.md` from the Rmd:
 
 ```bash
 Rscript scripts/build_index_from_rmd.R
 ```
-
-## GitHub Pages
-
-This project is configured to publish from `main` branch, root (`/`), using:
-- `index.md` as the public page entrypoint
-- report PDF linked from README and page content
-
-Project page: https://nikolailen.github.io/air-quality-ml-r/
 
 ## License
 

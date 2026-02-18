@@ -1,7 +1,7 @@
 Air Quality Modeling Research Report
 ================
-Nikolai Len
-2025-01-26
+Data ScienceTech Institute, 2025
+Author: Nikolai Len
 
 # Task 1: Constrained Multiple Regression on Ozone Data
 
@@ -1211,10 +1211,10 @@ Forest’s performance and reduce overfitting risks.
     ## Mean Specificity: 0.9417
 
     ## Thresholding step
-    ## Estimated computational time (on one core): 1.8 sec.
+    ## Estimated computational time (on one core): 2 sec.
     ## 
-    ## Interpretation step (on 17 variables)
-    ## Estimated computational time (on one core): between 3.4 sec. and  3.4 sec.
+    ## Interpretation step (on 20 variables)
+    ## Estimated computational time (on one core): between 0 sec. and  4 sec.
     ## 
     ## Prediction step (on 3 variables)
     ## Maximum estimated computational time (on one core): 0 sec.
@@ -2648,23 +2648,23 @@ meaningfully to the model’s performance.
     ## Mean R-squared: 0.5766
 
     ## Thresholding step
-    ## Estimated computational time (on one core): 27.4 sec.
+    ## Estimated computational time (on one core): 27.8 sec.
     ## 
     ## Interpretation step (on 17 variables)
-    ## Estimated computational time (on one core): between 8.5 sec. and  37.4 sec.
+    ## Estimated computational time (on one core): between 5.1 sec. and  37.4 sec.
     ## 
-    ## Prediction step (on 12 variables)
-    ## Maximum estimated computational time (on one core): 26.4 sec.
-    ##   |                                                                              |                                                                      |   0%  |                                                                              |======                                                                |   8%  |                                                                              |============                                                          |  17%  |                                                                              |==================                                                    |  25%  |                                                                              |=======================                                               |  33%  |                                                                              |=============================                                         |  42%  |                                                                              |===================================                                   |  50%  |                                                                              |=========================================                             |  58%  |                                                                              |===============================================                       |  67%  |                                                                              |====================================================                  |  75%  |                                                                              |==========================================================            |  83%  |                                                                              |================================================================      |  92%  |                                                                              |======================================================================| 100%
+    ## Prediction step (on 11 variables)
+    ## Maximum estimated computational time (on one core): 17.6 sec.
+    ##   |                                                                              |                                                                      |   0%  |                                                                              |======                                                                |   9%  |                                                                              |=============                                                         |  18%  |                                                                              |===================                                                   |  27%  |                                                                              |=========================                                             |  36%  |                                                                              |================================                                      |  45%  |                                                                              |======================================                                |  55%  |                                                                              |=============================================                         |  64%  |                                                                              |===================================================                   |  73%  |                                                                              |=========================================================             |  82%  |                                                                              |================================================================      |  91%  |                                                                              |======================================================================| 100%
 
     ## 
     ## === Test Set Evaluation (Regression) ===
 
-    ## Test MSE: 27.6422
+    ## Test MSE: 29.2708
 
-    ## Test RMSE: 5.2576
+    ## Test RMSE: 5.4103
 
-    ## Test R-squared: 0.5016
+    ## Test R-squared: 0.4722
 
     ## 
     ## === Variable Importance ===
