@@ -17,14 +17,14 @@ rmarkdown::render(
 )
 
 header_block <- c(
-  "Data ScienceTech Institute, 2025",
+  "Data ScienceTech Institute, 2025<br>",
   "Author: Nikolai Len"
 )
 
 contact_section <- c(
   "## Contact",
   "Nikolai Len",
-  "👤 [LinkedIn](https://www.linkedin.com/in/niklen/)"
+  "\U0001F464 [LinkedIn](https://www.linkedin.com/in/niklen/)"
 )
 
 lines <- readLines(output_file, warn = FALSE, encoding = "UTF-8")
